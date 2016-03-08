@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 __author__ = 'yalu'
 
 import os
@@ -13,13 +13,23 @@ from pedetails.pedetailer import PEDetailer
 from logger import Logger
 import magic
 
+# import urllib3
+# urllib3.disable_warnings()
+
+try:
+    from requests.packages.urllib3.exceptions import InsecureRequestWarning, InsecurePlatformWarning
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+    requests.packages.urllib3.disable_warnings(InsecurePlatformWarning)
+except (AttributeError, ImportError):
+    pass
+
 malshare_types = "HTML", "PE32", "Zip"
 
 DB_ADRESS = "malshare.db"
 PE_DB = "pedb"
 FIRST_DATE_IN_MALSHARE = "2013 04 06"
-VIRUS_TOTAL_FILE_SCAN_URL = "http://virustotal.com/vtapi/v2/file/scan"
-VIRUS_TOTAL_REPORT_REQUEST_URL = "http://virustotal.com//vtapi/v2/file/report"
+VIRUS_TOTAL_FILE_SCAN_URL = "https://www.virustotal.com/vtapi/v2/file/scan"
+VIRUS_TOTAL_REPORT_REQUEST_URL = "http://virustotal.com/vtapi/v2/file/report"
 MD5_FOR_TESTS = "00c22bba2c767f5bdc5ea9eaa139e221"
 # example of daily string: http://malshare.com/daily/year-month-day/malshare_fileList.year-month-day.txt
 url_daily_string_head = "http://malshare.com/daily/"
@@ -383,6 +393,10 @@ def download_file(api_key, _file_hash, destination):
     :param destination:
     :return: bool, str
     """
+    TAG = "DownloadingFileFromMalshare"
+    if os.path.exists(destination):
+        my_logger.log(TAG, "File exists no need to download")
+        return True, "File exists no need to download"
     _url = "http://malshare.com/api.php?api_key=" + api_key + "&action=getfile&hash=" + _file_hash
     r = requests.get(_url)
     content = r.content
@@ -454,12 +468,16 @@ def handle_hash(file_hash, destination_address=".", api_key=None, _db_handler=No
                 _download_date = gmtime(time())
                 _download_date_to_db = asctime(_download_date)
                 if _pedb is not None:
-                    pedetailer = PEDetailer(_pedb, my_logger)
-                    _pedetailsuccess, _pedetailmsg = pedetailer.analyse_pe_file(os.path.join(destination_address, file_hash))
-                    if _pedetailsuccess:
-                        my_logger.log(TAG, "Registered PE file details successfully: " + _pedetailmsg)
-                    else:
-                        my_logger.log(TAG, "Error registering PE file, was: " + _pedetailmsg)
+                    try:
+                        pedetailer = PEDetailer(_pedb, my_logger, _db_handler)
+                        _pedetailsuccess, _pedetailmsg = pedetailer.analyse_pe_file(os.path.join(destination_address, file_hash))
+                        if _pedetailsuccess:
+                            my_logger.log(TAG, "Registered PE file details successfully: " + _pedetailmsg)
+                        else:
+                            my_logger.log(TAG, "Error registering PE file, was: " + _pedetailmsg)
+                    except Exception as peerror:
+                        my_logger.log(TAG, "Error registering PE file, was: " + str(peerror.args))
+
     if _register_enabled:
         # print(TAG + "Register is enabled, putting all on db")
         if _db_handler is None:
@@ -548,7 +566,8 @@ def connect_to_database(here):
         "CREATE TABLE IF NOT EXISTS pefile(md5 VARCHAR, sha1 VARCHAR , sha256 VARCHAR , sha512 VARCHAR , imp_hash VARCHAR , compilation_date VARCHAR , suspicious INTEGER)",
         " CREATE TABLE IF NOT EXISTS pesection(nome VARCHAR , tamanho VARCHAR , md5 VARCHAR )",
         "CREATE TABLE IF NOT EXISTS peimport(md5 VARCHAR , address VARCHAR , nome VARCHAR , dll VARCHAR )",
-        "CREATE TABLE IF NOT EXISTS peexport(md5 VARCHAR , address VARCHAR , nome VARCHAR , ordinal VARCHAR )"
+        "CREATE TABLE IF NOT EXISTS peexport(md5 VARCHAR , address VARCHAR , nome VARCHAR , ordinal VARCHAR )",
+        "CREATE TABLE IF NOT EXISTS vtqueuedscan(md5 VARCHAR, file_address VARCHAR, data_postagem VARCHAR, scan_id VARCHAR, response_code INTEGER, permalink VARCHAR, verbose_msg VARCHAR )"
     ]
     for stmnt in script:
         curs.execute(stmnt)
@@ -580,17 +599,17 @@ def vt_get_report_until_ready(api_key, resource, db_address):
             sleep(5)
 
 
-def insert_scan(db_address, details):
+def insert_scan(con, details):
     """
     Insert details of a virustotal scan on db
-    :param db_address: 
+    :param con:
     :param details: 
     :return:
     """
     TAG = "InsertinScanResults"
     my_logger.log(TAG, "Inserting scan details for scanid: " + str(details['scan_id']))
     try:
-        con = sqlite3.connect(db_address)
+        #con = sqlite3.connect(db_address)
         cursor = con.cursor()
         #Inserting scan metadata and scan details on db
         cursor.execute("INSERT INTO vtscan(scanid, md5, _date, positives, total, permalink) VALUES (?,?,?,?,?,?)",
@@ -599,27 +618,13 @@ def insert_scan(db_address, details):
         for _item in details['scans'].items():
             antivirus = _item[0]
             result = _item[1]
-            #print("Processing scans, Antivirus is : " + str(antivirus), " Result: " + str(result))
-            #Verifyng if antivirus is on db and inserting it if not inserted before.
-            # av_db_result = cursor.execute("SELECT antivirusid FROM vtantivirus WHERE nome= ?", [antivirus,]).fetchone()
-            # while av_db_result is None:
-            #     cursor.execute("INSERT INTO vtantivirus(nome) VALUES (?)", [antivirus,])
-            #     con.commit()
-            #     av_db_result = cursor.execute("SELECT antivirusid FROM vtantivirus WHERE nome= ?",
-            #                                   [antivirus,]).fetchone()
-            # av_db_id = av_db_result[0]
             cursor.execute("INSERT INTO scandetail(scanid, antivirus, detected, version, result, last_date) VALUES "
                            "(?,?,?,?,?,?)", [details['scan_id'], antivirus, str(result['detected']), result['version'],
                                                    str(result['result']), result['update']])
-            con.commit()
-        con.close()
+        con.commit()
         my_logger.log(TAG, "Scan Inserted succesfully")
         return True, "Scan Inserted succesfully"
     except Exception as e:
-        try:
-            con.close()
-        except Exception:
-            pass
         my_logger.log(TAG, "Error inserting scan: " + str(e.args))
         return False, "ERROR inserting scan detail: " + str(e.args)
     
@@ -653,7 +658,7 @@ def vt_get_report(api_key, resource):
         return -1, json.loads('{"error":"' + str(e.args) + '"}')
 
 
-def vt_file_scan(api_key, file_address):
+def vt_file_scan(api_key, file_address, db_handler):
     """
     This method sends a request to the virustotal API to analyse a file which location is specified in file_address.
     Returns True if the file was succesfully queued for analysis and the data of the process in the second parameter
@@ -664,15 +669,35 @@ def vt_file_scan(api_key, file_address):
     """
     TAG = "SendingFileToScan"
     my_logger.log(TAG, "Will send file for scan, file in address: " + file_address)
+
     try:
         file_address = os.path.abspath(file_address)
+        my_logger.log(TAG, "File address is: " + file_address)
         _file_name = os.path.basename(file_address)
+        my_logger.log(TAG, "File name is: " + _file_name)
         _params = {'apikey': api_key}
         _files = {'file': (_file_name, open(file_address, 'rb').read())}
-        _response = requests.post(VIRUS_TOTAL_FILE_SCAN_URL, params=_params, files=_files)
+        _response = requests.post(VIRUS_TOTAL_FILE_SCAN_URL, params=_params, files=_files, verify=False)
         if _response.ok:
+            _data_postagem = asctime(gmtime(time()))
             _content = _response.content.decode('utf-8')
             my_logger.log(TAG, "ScanningFile" + file_address + " : " + _content)
+
+            try:
+                my_logger.log(TAG, "Inserting on db this file sent to scan details.")
+                _db_cursor = db_handler.cursor()
+                _j = json.loads(_content)
+                _sql = "INSERT INTO vtqueuedscan(md5 ,file_address ,data_postagem ,scan_id ,response_code, permalink, " \
+                       "verbose_msg) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                _db_cursor.execute(_sql, [_j['md5'], file_address, _data_postagem, _j['scan_id'], _j['response_code'],
+                                          _j['permalink'], _j['verbose_msg']])
+                db_handler.commit()
+                my_logger.log(TAG, "Succesfully inserted sent to scan details.")
+            except Exception as je:
+                my_logger.log(TAG, "Error inserting scan details: " + str(je.args))
+
+
+
             #return True, json.loads(_content)
         else:
             my_logger.log(TAG,"ScanningFile: " + file_address + "  Network Error")
@@ -735,18 +760,18 @@ def virustotal_analysis(malshare_api_key, virustotal_api_key, malshare_output_fo
 
                     if result_code == 1:
                         my_logger.log(TAG, "Report found without scanning file, now inserting.")
-                        insertion_successfull, details = insert_scan(db_file_address, _js)
+                        insertion_successfull, details = insert_scan(output_db_handler, _js)
                         if insertion_successfull:
                             _processed_instances.add(_hash)
 
                     if result_code == 0:
                         my_logger.log(TAG, "Dont exist report so sending file to scan.")
-
-                        Thread(target=vt_file_scan, name=_hash, args=[virustotal_api_key,
-                                                                      os.path.join(malshare_output_folder, _hash)]).start()
+                        _file_to_scan = os.path.join(malshare_output_folder, _hash)
+                        #Thread(target=vt_file_scan, name=_hash, args=[virustotal_api_key, _file_to_scan, db_file_address]).start()
+                        vt_file_scan(virustotal_api_key, _file_to_scan, output_db_handler)
 
                     if result_code == -2:
-                        my_logger.log(TAG, "File queued for analysis.")
+                        my_logger.log(TAG, "File already queued for analysis.")
                             # _thread = Thread(name=_hash, target=vt_get_report_until_ready, args=[virustotal_api_key,
                             #                                                                     scanid,
                             #                                                                     db_file_address])
@@ -985,6 +1010,7 @@ def testing_get_extraction_with_defined_date():
 
 
 if __name__ == "__main__":
+    # vt_file_scan("e51431ba0e2c49cbbfa247942b3b47d03c475f9d13daaa37a3a58e0466296fc2", "vstestfolder/1f3cda4e3ee6a0b7d9df8ba839fc8887", 'dbtest')
     main(sys.argv[1:])
 #
 # if __name__ == "__main__":

@@ -31,13 +31,14 @@ class PeFile:
 
 class PEDetailer():
 
-    def __init__(self, pe_db_address=None, logger=None):
+    def __init__(self, pe_db_address=None, logger=None, pe_db_handler=None):
         self.logger = logger
         if self.logger is None:
             self.logger = Logger()
         self.pe_db_address = pe_db_address
         if self.pe_db_address is None:
             self.pe_db_address = "pedb.db"
+        self.pe_db_handler = pe_db_handler
         self.pe_db = self.pe_connect_to_database(self.pe_db_address)
 
     def pe_connect_to_database(self, here):
@@ -49,7 +50,13 @@ class PEDetailer():
             :type here: str
             :return: sqlite3.Connection
             """
-        con = sqlite3.connect(here)
+        TAG = "PEConnectToDb"
+        if self.pe_db_handler is not None:
+            self.logger.log(TAG, "Using provided db handler")
+            return self.pe_db_handler
+        else:
+            self.logger.log(TAG, "Connectin to db address provided")
+            con = sqlite3.connect(here)
         curs = con.cursor()
         try:
             curs.execute("SELECT md5 FROM pefile LIMIT 1")
@@ -80,7 +87,6 @@ class PEDetailer():
                        "VALUES(?,?,?,?,?,?,?) ", [pefile_obj.md5, pefile_obj.sha1, pefile_obj.sha256, pefile_obj.sha512,
                                                     pefile_obj.imp_hash, pefile_obj.compilation_date, pefile_obj.suspicious,
                                                     ])
-        self.pe_db.commit()
         for _section in pefile_obj.pesections:
             cursor.execute("INSERT INTO pesection(nome, tamanho, md5) VALUES (?,?,?)", [_section['name'], _section['size'],
                                                                                         pefile_obj.md5])
@@ -120,7 +126,7 @@ class PEDetailer():
             _pesections = list()
             _peimports = list()
             _peexports = list()
-            _filetype = ""
+
             try:
                 imp_hash = pe.get_imphash()
             except:
@@ -140,16 +146,21 @@ class PEDetailer():
                     ts += ' [SUSPICIOUS]'
                 if ts:
                     compilation_date = ts
+            try:
+                if pe.sections:
+                    for section in pe.sections:
+                        _pesections.append({"name": section.Name, "size": section.SizeOfRawData})
+            except:
+                pass
 
-            if pe.sections:
-                for section in pe.sections:
-                    _pesections.append({"name": section.Name, "size": section.SizeOfRawData})
-
-            if pe.DIRECTORY_ENTRY_IMPORT:
-                for entry in pe.DIRECTORY_ENTRY_IMPORT:
-                    for imp in entry.imports:
-                        _import = {"address": hex(imp.address), "name": imp.name, "dll": entry.dll}
-                        _peimports.append(_import)
+            try:
+                if pe.DIRECTORY_ENTRY_IMPORT:
+                    for entry in pe.DIRECTORY_ENTRY_IMPORT:
+                        for imp in entry.imports:
+                            _import = {"address": hex(imp.address), "name": imp.name, "dll": entry.dll}
+                            _peimports.append(_import)
+            except:
+                pass
 
             try:
                 if pe.IMAGE_DIRECTORY_ENTRY_EXPORT.symbols:

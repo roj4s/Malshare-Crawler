@@ -655,6 +655,9 @@ def vt_get_report(api_key, resource):
         j = json.loads(_content)
         return j['response_code'], j
     except Exception as e:
+        my_logger.log(TAG, "ERROR: " + str(e.args))
+        my_logger.log(TAG, "Response is: " + str(_response.content))
+        my_logger.log(TAG, "Response is: " + str(_content))
         return -1, json.loads('{"error":"' + str(e.args) + '"}')
 
 
@@ -764,7 +767,7 @@ def virustotal_analysis(malshare_api_key, virustotal_api_key, malshare_output_fo
                         if insertion_successfull:
                             _processed_instances.add(_hash)
 
-                    if result_code == 0:
+                    if result_code == 0 or result_code == -1:
                         my_logger.log(TAG, "Dont exist report so sending file to scan.")
                         _file_to_scan = os.path.join(malshare_output_folder, _hash)
                         #Thread(target=vt_file_scan, name=_hash, args=[virustotal_api_key, _file_to_scan, db_file_address]).start()

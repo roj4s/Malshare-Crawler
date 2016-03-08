@@ -544,8 +544,6 @@ def connect_to_database(here):
         "CREATE TABLE IF NOT EXISTS source(md5 VARCHAR , source VARCHAR );",
         "CREATE TABLE IF NOT EXISTS download(md5 VARCHAR , download_date VARCHAR , pc_address_download VARCHAR, magic_file_type VARCHAR )",
         "CREATE TABLE IF NOT EXISTS vtscan(scanid VARCHAR, md5 VARCHAR, _date VARCHAR, positives INTEGER, total INTEGER, permalink VARCHAR)",
-        "CREATE TABLE IF NOT EXISTS pevalues (md5 VARCHAR, timedatecreated VARCHAR, suspicious INTEGER )",
-        "CREATE TABLE IF NOT EXISTS pesections (md5 VARCHAR, nome VARCHAR, sizeofrawdata VARCHAR)",
         "CREATE TABLE IF NOT EXISTS scandetail(scanid VARCHAR, antivirus VARCHAR , detected INTEGER, version VARCHAR, result VARCHAR, last_date VARCHAR )",
         "CREATE TABLE IF NOT EXISTS pefile(md5 VARCHAR, sha1 VARCHAR , sha256 VARCHAR , sha512 VARCHAR , imp_hash VARCHAR , compilation_date VARCHAR , suspicious INTEGER)",
         " CREATE TABLE IF NOT EXISTS pesection(nome VARCHAR , tamanho VARCHAR , md5 VARCHAR )",

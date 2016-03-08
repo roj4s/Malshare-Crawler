@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 __author__ = 'yalu'
 
 import os
@@ -7,15 +7,24 @@ import json
 import sqlite3
 import sys
 import getopt
-from time import time, mktime, strptime, asctime, gmtime
+from threading import Thread
+from time import time, mktime, strptime, asctime, gmtime, strftime, sleep
+from pedetails.pedetailer import PEDetailer
+from logger import Logger
+import magic
 
-malshare_types = set()
+malshare_types = "HTML", "PE32", "Zip"
 
-DB_NAME = "malshare.db"
+DB_ADRESS = "malshare.db"
+PE_DB = "pedb"
 FIRST_DATE_IN_MALSHARE = "2013 04 06"
+VIRUS_TOTAL_FILE_SCAN_URL = "http://virustotal.com/vtapi/v2/file/scan"
+VIRUS_TOTAL_REPORT_REQUEST_URL = "http://virustotal.com//vtapi/v2/file/report"
+MD5_FOR_TESTS = "00c22bba2c767f5bdc5ea9eaa139e221"
 # example of daily string: http://malshare.com/daily/year-month-day/malshare_fileList.year-month-day.txt
 url_daily_string_head = "http://malshare.com/daily/"
 url_string_head = "http://malshare.com/"
+my_logger = Logger()
 url_with_api_string_head = url_string_head + "api.php?api_key="
 str_action = "&action="
 str_action_get_list_html = str_action + "getlist"
@@ -27,6 +36,211 @@ str_action_details = str_action + "details&hash="
 str_action_last24h_md5list_from_file_type = str_action + "type&type="
 
 
+def main(argv):
+    """
+    This method will handle the input parameters and args and validate each of them.
+    Then will pass control to the method real_extraction which do the hard work.
+    :param argv:
+    :return:
+    """
+
+
+    usage = "mlshrcrawler -s/--starting-date Starting date(%Y %m %d) -e/--ending-date Ending date (%Y %m %d) \n" \
+            "             -o/--output-database Output database address -p/--download-to-address Address in the pc  \n" \
+            "              where to download files -t/--file-type Filter for type of file -h/--help \n" \
+            "              -d/--download This option will enable the download. \n" \
+            "              -r/--register This option will enable the register into db -k/--api-key Malshare api key, \n" \
+            "              -q/--apikey-from-file Address of a file containing the Malshare API Key \n" \
+            "              -c/--continue-downloading If specified will look for the last element in the db specified \n" \
+            "              and will continue downloading from the rest elements in that date. -n/--notify-each A number \n" \
+            "              of instances after which the program will notify the status of downloaded and or registered. \n " \
+            "              -v/--last-24h-virus-scan Iniside an infinite loop will download last 24 hours found viruses \n " \
+            "              on malshare dataset, send it to virustotal and register the virus metadata and  results of \n" \
+            "              the scan. -w/--virustotal-apikey Virus total api key, -a/--virustotal-apikey-fromfile Load \n" \
+            "              Virus total api key from specified file address. \n" \
+            "              -f/--verbose-to-file Print results of any operation to file" \
+
+    try:
+        opts, args = getopt.getopt(argv, "hs:e:o:p:t:k:q:n:drcvw:a:f:", ["help", "starting-date=", "ending-date=",
+                                                               "output-database=", "download-to-address=",
+                                                                 "file-type=", "download", "register",
+                                                                 "api-key=", "apikey-from-file=",
+                                                               "continue-downloading", "notify-each=",
+                                                               "last-24h-virus-scan", "virustotal-apikey=",
+                                                               "virustotal-apikey-fromfile=,verbose-to-file="])
+        # print("Args is : " + str(args))
+        # print("Opts is : " + str(opts))
+        # print("Args is : " + str(args))
+
+    except getopt.GetoptError as e:
+        print("GetOpt Error:" + e.msg)
+        print("Usage is: " + usage)
+        sys.exit(2)
+
+    _starting_date = None
+    _ending_date = None
+    _output_database_address = None
+    _output_database_handler = None
+    _hashes_list = []
+    _pc_address_to_download = "."
+    _type_of_file = None
+    _download_enabled = None
+    _register_enabled = None
+    _continue_downloading = False
+    _malshare_api_key = None
+    _virus_total_api_key = None
+    _notify_after = None
+    _loop24h_virus_scan = False
+    _verbose_to_file = None
+    if len(opts) == 0:
+        print(usage)
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt in ("-h", "--help"):
+            print("Usage is: " + usage)
+            sys.exit(1)
+        elif opt in ("-s", "--starting-date"):
+            _date = arg
+            if not is_date_valid(_date):
+                print("Sorry, seems like date is not valid. Must be in the format %Y %m %d, e.i 2014 04 01")
+                sys.exit(2)
+            _starting_date = _date
+            first_date_in_malshare = mktime(strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d"))
+            if mktime(strptime(_starting_date, "%Y %m %d")) < first_date_in_malshare:
+                print("The date entered is before the first date in malshare, setting to the first date in malshare: " + FIRST_DATE_IN_MALSHARE)
+                _starting_date = FIRST_DATE_IN_MALSHARE
+        elif opt in ("-e", "--ending-date"):
+            #print("Specified ending date, args is: " + str(args))
+            _date = arg
+            if not is_date_valid(arg):
+                print("Sorry, seems like date is not valid. Must be in the format %Y %m %d, e.i 2014 04 01")
+                sys.exit(2)
+            _ending_date = _date
+            _now = time()
+            if mktime(strptime(_ending_date, "%Y %m %d")) > _now:
+                print("The date entered is after today, setting to today: " + strftime(_now))
+        elif opt in ("-o", "--output-database"):
+            con = connect_to_database(arg)
+            _output_database_handler = con
+            _output_database_address = arg
+            _register_enabled = True
+        elif opt in ("-p", "--download-to-address"):
+            try:
+                os.makedirs(arg)
+            except Exception as e:
+                pass
+            _pc_address_to_download = arg
+            _download_enabled = True
+        elif opt in ("-t", "--file-type"):
+            if _type_of_file not in malshare_types:
+                print("The specified file type is wrong")
+                correct_file_types = ""
+                for file_type in malshare_types:
+                    correct_file_types += " " + file_type
+                print("Correct file types are: " + correct_file_types)
+                sys.exit(2)
+            _type_of_file = arg
+        elif opt in ("-d", "--download"):
+            _download_enabled = True
+        elif opt in ("-r", "--register"):
+            _register_enabled = True
+        elif opt in ("-q", "--apikey-from-file"):
+            #print("Api key from file")
+            try:
+                with open(arg) as _f:
+                    _malshare_api_key = _f.read()
+                #print("Api key found is: " + _api_key)
+                while "\n" in _malshare_api_key:
+                    _malshare_api_key = _malshare_api_key[:len(_malshare_api_key) - 1]
+                _valid_api_key = is_apikey_valid(_malshare_api_key)
+                if _valid_api_key == 0:
+                    print("Couldn't determinate if the provided api key is valid")
+                    sys.exit(2)
+                elif _valid_api_key == -1:
+                    print("Definitely the api key provided is not valid.")
+                    sys.exit(2)
+            except FileNotFoundError:
+                print("Seems like the file with the api key provided don't exist in that address.")
+                sys.exit(2)
+        elif opt in ("-k", "--api-key"):
+            _valid_api_key = is_apikey_valid(arg)
+            if _valid_api_key == 1:
+                _malshare_api_key = arg
+            elif _valid_api_key == 0:
+                print("Couldn't determinate if the provided api key is valid")
+                sys.exit(2)
+            elif _valid_api_key == -1:
+                print("Definitely the api key provided is not valid.")
+                sys.exit(2)
+        elif opt in ("-c", "--continue-downloading"):
+            _continue_downloading = True
+        elif opt in ('-n', "--notify-each"):
+            try:
+                _notify_after = int(arg)
+            except ValueError:
+                print("The notify after argument is wrong, must be a number.")
+                sys.exit(2)
+        elif opt in ('-v', '--last-24h-virus-scan'):
+            _loop24h_virus_scan = True
+        elif opt in ('-w', '--virustotal-apikey'):
+            _valid_api_key = is_virustotal_apikey_valid(arg)
+            if _valid_api_key == 1:
+                _virus_total_api_key = arg
+            elif _valid_api_key == 0:
+                print("Couldn't determinate if the provided api key is valid")
+                sys.exit(2)
+            elif _valid_api_key == -1:
+                print("Definitely the api key provided is not valid.")
+                sys.exit(2)
+        elif opt in ('-f', '--verbose-to-file'):
+            global my_logger
+            my_logger = Logger(arg)
+        elif opt in ('-a', '--virustotal-apikey-fromfile'):
+            try:
+                with open(arg) as _f:
+                    _virus_total_api_key = _f.read()
+                while "\n" in _virus_total_api_key:
+                    _virus_total_api_key = _virus_total_api_key[:len(_virus_total_api_key) - 1]
+                _valid_api_key = is_virustotal_apikey_valid(_virus_total_api_key)
+                if _valid_api_key == 0:
+                    print("Couldn't determinate if the provided api key is valid")
+                    sys.exit(2)
+                elif _valid_api_key == -1:
+                    print("Definitely the api key provided is not valid.")
+                    sys.exit(2)
+            except FileNotFoundError:
+                print("Seems like the file with the api key provided don't exist in that address.")
+                sys.exit(2)
+        else:
+            print(usage)
+            sys.exit(2)
+    if _malshare_api_key is None:
+        print("You must specify an API key for this program to work.")
+        sys.exit(2)
+    if _loop24h_virus_scan:
+        if _virus_total_api_key is None:
+            print("Must specify VirusTotal api key.")
+            print(usage)
+            sys.exit(2)
+        if _malshare_api_key is None:
+            print("Must specify Malshare api key.")
+            print(usage)
+            sys.exit(2)
+        if _pc_address_to_download is None:
+            print("Must specify pc address to download files.")
+            print(usage)
+            sys.exit(2)
+        if _output_database_address is None:
+            print("Must specify a database address.")
+            print(usage)
+            sys.exit(2)
+        virustotal_analysis(_malshare_api_key, _virus_total_api_key, _pc_address_to_download, _output_database_handler,
+                            _output_database_address)
+    else:
+        real_extraction(_malshare_api_key, _starting_date, _ending_date, _output_database_address,
+                        _pc_address_to_download, _type_of_file, _download_enabled, _register_enabled,
+                        _continue_downloading, _notify_after)
+
 class Malshare_tuple():
     """
     Class for the instances of tuples to Malshare database.
@@ -34,7 +248,7 @@ class Malshare_tuple():
     """
 
     def __init__(self, tuple_id=-1, md5="", sha1="", sha256="", ssdeep="", file_type="", sources=list(), date_posted="",
-                 date_downloaded="", pc_address_download=""):
+                 date_downloaded="", pc_address_download="", magic_file_type=""):
         """
 
         :param tuple_id: Malware tuple id inside the local Malshare database
@@ -47,6 +261,7 @@ class Malshare_tuple():
         :param date_posted: Date in which was posted to Malshare.
         :param date_downloaded: Last date in which was downloaded by this user.
         :param pc_address_download: Path on PC where the file was downloaded.
+        :param magic_file_type: File type as obtained from magic module.
         :type tuple_id: int
         :type md5: str
         :type sha1: str
@@ -57,11 +272,12 @@ class Malshare_tuple():
         :type date_posted: str
         :type date_downloaded: str
         :type pc_address_download: str
+        :type magic_file_type: str
         :return: Malshare_tuple
         """
         self.tuple_id, self.md5, self.sha1, self.sha256, self.ssdeep, self.file_type, self.sources, self.date_posted, \
-        self.date_downloaded, self.pc_address_download = tuple_id, md5, sha1, sha256, ssdeep, file_type, sources, \
-                                                         date_posted, date_downloaded, pc_address_download
+        self.date_downloaded, self.pc_address_download, self.magic_file_type = tuple_id, md5, sha1, sha256, ssdeep, file_type, sources, \
+                                                         date_posted, date_downloaded, pc_address_download, magic_file_type
 
     def add_source(self, source):
         """
@@ -85,9 +301,13 @@ def get_daily_url_from_date(year, month, day):
     :type year: int
     :return str
     """
+    _today = gmtime(time())
+
     if len(str(day)) == 1: day = "0" + str(day)
     if len(str(month)) == 1: month = "0" + str(month)
     aux = str(year) + "-" + str(month) + "-" + str(day)
+    if _today.tm_year == int(year) and _today.tm_mon == int(month) and _today.tm_mday == int(day):
+        return url_daily_string_head + "malshare.current.txt"
     return url_daily_string_head + aux + "/malshare_fileList." + aux + ".txt"
 
 
@@ -103,6 +323,7 @@ def get_hashlist_from_date(year, month, day):
     :type year: int
     :return list
     """
+
     url = get_daily_url_from_date(year, month, day)
     r = requests.get(url)
     b = r.content
@@ -160,7 +381,7 @@ def download_file(api_key, _file_hash, destination):
     :param api_key:
     :param _file_hash:
     :param destination:
-    :return: tuple(bool,str)
+    :return: bool, str
     """
     _url = "http://malshare.com/api.php?api_key=" + api_key + "&action=getfile&hash=" + _file_hash
     r = requests.get(_url)
@@ -170,6 +391,8 @@ def download_file(api_key, _file_hash, destination):
         _response = content.decode('utf-8')
     except Exception:
         pass
+    if 'ERROR! => Over Request Limit.' in _response:
+        return False, _response
     if 'not activated' in _response:
         return False, "Wrong api key"
     if 'Invalid Hash' in _response:
@@ -185,7 +408,7 @@ def download_file(api_key, _file_hash, destination):
 
 
 def handle_hash(file_hash, destination_address=".", api_key=None, _db_handler=None,
-                _register_enabled=True, _download_enabled=False, _processing_date="", _file_type=None):
+                _register_enabled=True, _download_enabled=False, _processing_date="", _file_type=None, _pedb=None):
     """
     Download and/or register a specified hash, by default it only download to the specified address.
     Returns a tuple with a dict and a array, the first with the success or failure on download and register process
@@ -203,15 +426,21 @@ def handle_hash(file_hash, destination_address=".", api_key=None, _db_handler=No
     """
     TAG = "Handling hash " + file_hash + " "
     _result_messages = []
+    _download_to = ""
     _download_correct = False
     _register_correct = False
-    _download_date = None
+    _download_date_to_db = None
+    magic_file_type = ""
     details = get_file_details_json(file_hash, api_key)
     if _file_type is not None:
+        # print(TAG + "File type specified is: " + _file_type)
         if not _file_type == details["F_TYPE"]:
-            return {"download_ok": True, "register_ok": True}, ["Unwanted file type"]
+            # print(TAG + "This hash file type is not desired to be processed, so jumping")
+            return ({"download_ok": True, "register_ok": True}, ["Unwanted file type"])
     if _download_enabled:
+        # print(TAG + "Download enabled, trying to download file")
         if not os.path.exists(destination_address):
+            # print(TAG + "Destination address dont exist so not downloading this instance.")
             _download_correct = False
             _result_messages.append("Specified path don't exist.")
         else:
@@ -220,29 +449,42 @@ def handle_hash(file_hash, destination_address=".", api_key=None, _db_handler=No
             _download_correct = _download_result[0]
             _result_messages .append(_download_result[1])
             if _download_correct:
-                _download_date = asctime(gmtime(time()))
+                magic_file_type = magic.from_file(_download_to)
+                # print(TAG + "File downloaded successfully.")
+                _download_date = gmtime(time())
+                _download_date_to_db = asctime(_download_date)
+                if _pedb is not None:
+                    pedetailer = PEDetailer(_pedb, my_logger)
+                    _pedetailsuccess, _pedetailmsg = pedetailer.analyse_pe_file(os.path.join(destination_address, file_hash))
+                    if _pedetailsuccess:
+                        my_logger.log(TAG, "Registered PE file details successfully: " + _pedetailmsg)
+                    else:
+                        my_logger.log(TAG, "Error registering PE file, was: " + _pedetailmsg)
     if _register_enabled:
+        # print(TAG + "Register is enabled, putting all on db")
         if _db_handler is None:
+            # print(TAG + "Not specified db handler, will not register this instance")
             _register_correct = False
             _result_messages.append(" Not specified db handler")
         else:
             try:
-
                 t = Malshare_tuple(-1, details.get('MD5'), details.get('SHA1'), details.get('SHA256'), details.get("SSDEEP"),
-                                   details.get("F_TYPE"), details.get('SOURCES'), _processing_date, _download_date,
-                                   destination_address)
+                                   details.get("F_TYPE"), details.get('SOURCES'), _processing_date, _download_date_to_db,
+                                   _download_to, magic_file_type)
                 _inserting_result = insert_tuple(_db_handler, t)
                 _register_correct = _inserting_result[0]
                 _result_messages.append(_inserting_result[1])
+                # print(TAG + "Inserting tuple says: " + str(_inserting_result))
             except Exception as e:
+                # print(TAG + "Something went wrong registering: " + str(e.args))
                 _register_correct = False
                 _result_messages.append("Error inserting tuple in db: " + str(e.args))
-        _partial_results = {'download_ok': True, 'register_ok': True}
-        if _download_enabled and not _download_correct:
-            _partial_results['download_ok'] = False
-        if _register_enabled and not _register_correct:
-            _partial_results['register_ok'] = False
-        return _partial_results, _result_messages
+    _partial_results = {'download_ok': True, 'register_ok': True}
+    if _download_enabled and not _download_correct:
+        _partial_results['download_ok'] = False
+    if _register_enabled and not _register_correct:
+        _partial_results['register_ok'] = False
+    return _partial_results, _result_messages
 
 def get_file_details_json(file_hash, api_key):
     """
@@ -253,15 +495,18 @@ def get_file_details_json(file_hash, api_key):
     :type api_key: str
     :return dict
     """
-    default_json = "{'MD5': 'No information found on malshare.', 'SSDEEP': 'No information found on malshare.', " \
-                   "'SOURCES':[] , 'SHA256': 'No information found on malshare.'" \
-                   "'SHA1': 'No information found on malshare.', 'F_TYPE': 'No information found on malshare.'}"
+    default_json = '{"MD5": "' + file_hash + '" , "SSDEEP": "No information found on malshare.", ' \
+                   '"SOURCES":[] , "SHA256": "No information found on malshare.", '\
+                   '"SHA1": "No information found on malshare.", "F_TYPE": "No information found on malshare."}'
     url = url_with_api_string_head + api_key + str_action_details + file_hash
     r = requests.get(url)
     request_content = r.content.decode('utf-8')
-    if "Sample not found" not in request_content:
-        default_json = request_content
-    return json.loads(default_json)
+    #print("Obtaining details of hash " + file_hash + " : " + request_content)
+    #print("Json will decode: " + request_content)
+    try:
+        return json.loads(request_content)
+    except Exception:
+        return json.loads(default_json)
 
 
 def get_filehashlast24h_fromfiletype_json(file_type, api_key):
@@ -296,12 +541,222 @@ def connect_to_database(here):
         pass
     script = [
         "CREATE TABLE IF NOT EXISTS malware (mid INTEGER NOT NULL, md5 VARCHAR , SHA1 VARCHAR , SHA256 VARCHAR , SSDEEP VARCHAR , FILE_TYPE VARCHAR, DATE_POSTED VARCHAR, PRIMARY KEY(mid))",
-        "CREATE TABLE IF NOT EXISTS source(mid INTEGER , source VARCHAR );",
-        "CREATE TABLE IF NOT EXISTS download(mid INTEGER , download_date VARCHAR , pc_address_download VARCHAR)"]
+        "CREATE TABLE IF NOT EXISTS source(md5 VARCHAR , source VARCHAR );",
+        "CREATE TABLE IF NOT EXISTS download(md5 VARCHAR , download_date VARCHAR , pc_address_download VARCHAR, magic_file_type VARCHAR )",
+        "CREATE TABLE IF NOT EXISTS vtscan(scanid VARCHAR, md5 VARCHAR, _date VARCHAR, positives INTEGER, total INTEGER, permalink VARCHAR)",
+        "CREATE TABLE IF NOT EXISTS pevalues (md5 VARCHAR, timedatecreated VARCHAR, suspicious INTEGER )",
+        "CREATE TABLE IF NOT EXISTS pesections (md5 VARCHAR, nome VARCHAR, sizeofrawdata VARCHAR)",
+        "CREATE TABLE IF NOT EXISTS scandetail(scanid VARCHAR, antivirus VARCHAR , detected INTEGER, version VARCHAR, result VARCHAR, last_date VARCHAR )",
+        "CREATE TABLE IF NOT EXISTS pefile(md5 VARCHAR, sha1 VARCHAR , sha256 VARCHAR , sha512 VARCHAR , imp_hash VARCHAR , compilation_date VARCHAR , suspicious INTEGER)",
+        " CREATE TABLE IF NOT EXISTS pesection(nome VARCHAR , tamanho VARCHAR , md5 VARCHAR )",
+        "CREATE TABLE IF NOT EXISTS peimport(md5 VARCHAR , address VARCHAR , nome VARCHAR , dll VARCHAR )",
+        "CREATE TABLE IF NOT EXISTS peexport(md5 VARCHAR , address VARCHAR , nome VARCHAR , ordinal VARCHAR )"
+    ]
     for stmnt in script:
         curs.execute(stmnt)
         con.commit()
     return con
+
+def vt_get_report_until_ready(api_key, resource, db_address):
+    """
+    Makes requests to obtain the report identified by the parameter resource, until a result is ready.
+    Then the results are inserted on a database located on the specified db_address.
+    This should run on a separate thread.
+    :param api_key:
+    :param resource:
+    :return:
+    """
+    TAG = "GettingReportUntilReady"
+    running = True
+    my_logger.log(TAG, "Executing in new thread, get report of sent file: " + resource)
+    while running:
+        try:
+            code, _json = vt_get_report(api_key, resource)
+            if code == 1:
+                my_logger.log(TAG, "Got report with code 1")
+                insert_scan(db_address, _json)
+                running = False
+            sleep(5)
+        except Exception as e:
+            my_logger.log(TAG, "ERROR obtaining report: " + str(e.args))
+            sleep(5)
+
+
+def insert_scan(db_address, details):
+    """
+    Insert details of a virustotal scan on db
+    :param db_address: 
+    :param details: 
+    :return:
+    """
+    TAG = "InsertinScanResults"
+    my_logger.log(TAG, "Inserting scan details for scanid: " + str(details['scan_id']))
+    try:
+        con = sqlite3.connect(db_address)
+        cursor = con.cursor()
+        #Inserting scan metadata and scan details on db
+        cursor.execute("INSERT INTO vtscan(scanid, md5, _date, positives, total, permalink) VALUES (?,?,?,?,?,?)",
+        [details['scan_id'], details['md5'], details['scan_date'], details['positives'], details['total'],
+         details['permalink']])
+        for _item in details['scans'].items():
+            antivirus = _item[0]
+            result = _item[1]
+            #print("Processing scans, Antivirus is : " + str(antivirus), " Result: " + str(result))
+            #Verifyng if antivirus is on db and inserting it if not inserted before.
+            # av_db_result = cursor.execute("SELECT antivirusid FROM vtantivirus WHERE nome= ?", [antivirus,]).fetchone()
+            # while av_db_result is None:
+            #     cursor.execute("INSERT INTO vtantivirus(nome) VALUES (?)", [antivirus,])
+            #     con.commit()
+            #     av_db_result = cursor.execute("SELECT antivirusid FROM vtantivirus WHERE nome= ?",
+            #                                   [antivirus,]).fetchone()
+            # av_db_id = av_db_result[0]
+            cursor.execute("INSERT INTO scandetail(scanid, antivirus, detected, version, result, last_date) VALUES "
+                           "(?,?,?,?,?,?)", [details['scan_id'], antivirus, str(result['detected']), result['version'],
+                                                   str(result['result']), result['update']])
+            con.commit()
+        con.close()
+        my_logger.log(TAG, "Scan Inserted succesfully")
+        return True, "Scan Inserted succesfully"
+    except Exception as e:
+        try:
+            con.close()
+        except Exception:
+            pass
+        my_logger.log(TAG, "Error inserting scan: " + str(e.args))
+        return False, "ERROR inserting scan detail: " + str(e.args)
+    
+def vt_get_report(api_key, resource):
+    """
+    Will request the virustotal API to retrieve existent reports on the file.
+    This method returns a tuple with the first element being a flag with one of the following values and its meanings:
+      0 : The file have not been scanned before
+      1 : The file have already been scanned
+      -2 : The file is queued for analysis
+      -1: Couldn't determinate, some error was raised.
+     The second element of the tuple is a json with details of this process, may include the report or if an error
+     was raised details of the error.
+    :param api_key:
+    :param resource:
+    :return:
+    """
+    TAG = "GettingFileScanReport"
+    my_logger.log(TAG, "Getting report for resource: " + resource)
+    try:
+        _request_url = VIRUS_TOTAL_REPORT_REQUEST_URL
+        _params = {'apikey': api_key, 'resource': resource, 'allinfo': 1}
+        _response = requests.get(_request_url, params=_params)
+        if not _response.ok:
+            return -1, json.loads('{"error": "Network error couldnt connect with the URL"}')
+        _content = _response.content.decode('utf-8')
+        #print("GettingReport, Response is: " + str(_content))
+        j = json.loads(_content)
+        return j['response_code'], j
+    except Exception as e:
+        return -1, json.loads('{"error":"' + str(e.args) + '"}')
+
+
+def vt_file_scan(api_key, file_address):
+    """
+    This method sends a request to the virustotal API to analyse a file which location is specified in file_address.
+    Returns True if the file was succesfully queued for analysis and the data of the process in the second parameter
+    Returns False if an error was raised and the error details.
+    :param api_key:
+    :param file_address:
+    :return:
+    """
+    TAG = "SendingFileToScan"
+    my_logger.log(TAG, "Will send file for scan, file in address: " + file_address)
+    try:
+        file_address = os.path.abspath(file_address)
+        _file_name = os.path.basename(file_address)
+        _params = {'apikey': api_key}
+        _files = {'file': (_file_name, open(file_address, 'rb').read())}
+        _response = requests.post(VIRUS_TOTAL_FILE_SCAN_URL, params=_params, files=_files)
+        if _response.ok:
+            _content = _response.content.decode('utf-8')
+            my_logger.log(TAG, "ScanningFile" + file_address + " : " + _content)
+            #return True, json.loads(_content)
+        else:
+            my_logger.log(TAG,"ScanningFile: " + file_address + "  Network Error")
+            #return False, "ERROR: Network connection error."
+    except Exception as e:
+        _error = "ERROR: " + str(e.args)
+        my_logger.log(TAG, "ScanningFile: " + file_address + " Error: " + _error)
+        #return False, _error
+
+
+def virustotal_analysis(malshare_api_key, virustotal_api_key, malshare_output_folder, output_db_handler,
+                        db_file_address):
+    """
+    This method will retrieve the last files posted on malshare and send those previously not handled
+    to virustotal for analysis. The analysis results will be dumped to virustotal_analysis_output_folder, the downloaded
+    virus samples will be dumped to malshare_output_folder and malshare files details will be registered on output_db.
+    :param malshare_api_key:
+    :param address_file:
+    :param output_db_handler:
+    :param virustotal_analysis_output_folder:
+    :return:
+    """
+    TAG = "VirusTotalScanMain,"
+    _api_request = "http://malshare.com/api.php?api_key=" + malshare_api_key + "&action=getlist"
+    _files_inserted_already = set()
+    _processed_instances = set()
+    _seen_hashes = set()
+    _threads_getting_reports = dict()
+    _threads_sending_files_to_scan = dict()
+    running = True
+    iterations = 0
+    while running:
+        my_logger.log(TAG, "Iteration: " + str(iterations))
+        iterations += 1
+        # try:
+        _req = requests.get(_api_request).content.decode("utf-8")
+        _hashes = _req.split('<br>')
+        _seen_hashes.update(set(_hashes))
+        _dif = _seen_hashes.difference(_processed_instances)
+        #logger.log(TAG, "Different hashes: " + str(_dif))
+        if len(_dif) > 0:
+            _processing_date = asctime(gmtime(time()))
+            my_logger.log(TAG, "Processing date is : " + _processing_date)
+            for _hash in _dif:
+                my_logger.log(TAG, "Processing hash: " + _hash)
+                if _hash.strip() == "":
+                    my_logger.log(TAG, "Hash is empty space skiping")
+                if _hash.strip() != "":
+                    if _hash not in _files_inserted_already:
+                        _success, msg = handle_hash(_hash, malshare_output_folder, malshare_api_key, output_db_handler,
+                                                    True, True, _processing_date, _pedb=db_file_address)
+                        if _success:
+                            my_logger.log(TAG, "Succesfully processed hash, now will get report.")
+                            _files_inserted_already.add(_hash)
+                    try:
+                        result_code, _js = vt_get_report(virustotal_api_key, _hash)
+                        my_logger.log(TAG , "Result code is: " + str(result_code))
+                    except Exception as h:
+                        my_logger.log(TAG , "ERROR getting report: " + str(h.args))
+
+                    if result_code == 1:
+                        my_logger.log(TAG, "Report found without scanning file, now inserting.")
+                        insertion_successfull, details = insert_scan(db_file_address, _js)
+                        if insertion_successfull:
+                            _processed_instances.add(_hash)
+
+                    if result_code == 0:
+                        my_logger.log(TAG, "Dont exist report so sending file to scan.")
+
+                        Thread(target=vt_file_scan, name=_hash, args=[virustotal_api_key,
+                                                                      os.path.join(malshare_output_folder, _hash)]).start()
+
+                    if result_code == -2:
+                        my_logger.log(TAG, "File queued for analysis.")
+                            # _thread = Thread(name=_hash, target=vt_get_report_until_ready, args=[virustotal_api_key,
+                            #                                                                     scanid,
+                            #                                                                     db_file_address])
+                            # _thread.start()
+                            # _threads_getting_reports[_hash] = _thread
+                            # _processed_instances.append(_hash)
+        # except Exception as e:
+        #     print("VirusTotalScanMain, ERROR: " + str(e.args))
 
 
 def insert_tuple(connection, _tuple):
@@ -316,19 +771,20 @@ def insert_tuple(connection, _tuple):
     """
     try:
         cursor = connection.cursor()
-        stmnt = "INSERT INTO malware(md5,sha1,sha256,ssdeep,file_type, date_posted) VALUES (?,?,?,?,?,?);"
-        stmnt_s = "INSERT INTO source(mid, source) VALUES (?,?);"
-        stmnt_d = "INSERT INTO download(mid, download_date, pc_address_download) VALUES (?,?,?)"
+        stmnt = "INSERT INTO malware(md5,sha1,sha256,ssdeep,file_type,date_posted) VALUES (?,?,?,?,?,?);"
+        stmnt_s = "INSERT INTO source(md5, source) VALUES (?,?);"
+        stmnt_d = "INSERT INTO download(md5, download_date, pc_address_download, magic_file_type) VALUES (?,?,?,?)"
 
         cursor.execute(stmnt,
                        [_tuple.md5, _tuple.sha1, _tuple.sha256, _tuple.ssdeep, _tuple.file_type, _tuple.date_posted])
-        _malware_id = cursor.lastrowid
         connection.commit()
         for source in _tuple.sources:
-            cursor.execute(stmnt_s, [_malware_id, source])
+            cursor.execute(stmnt_s, [_tuple.md5, source])
             connection.commit()
-        if not _tuple.date_downloaded.strip() == "":
-            cursor.execute(stmnt_d, [_malware_id, _tuple.date_downloaded, _tuple.pc_address_download])
+        if _tuple.date_downloaded is not None:
+            cursor.execute(stmnt_d, [_tuple.md5, _tuple.date_downloaded, _tuple.pc_address_download,
+                                     _tuple.magic_file_type])
+            connection.commit()
         return True, "Successfully inserted tuple"
     except Exception as e:
         return False, "Error inserting tuple: " + str(e.args)
@@ -381,13 +837,43 @@ def is_apikey_valid(api_key):
     :type api_key: str
     :return: int
     """
-    _url = "http://malshare.com//api.php?api_key=ksl&action=getlist"
-    r = requests.get(_url)
-    if r.ok:
-        if not r.content.decode("utf-8") == "ERROR! => Account not activated":
-            return 1
-        return -1
-    return 0
+    _url = "http://malshare.com/api.php?api_key=" + api_key + "&action=getlist"
+    TAG = "ValidatingMalshareApiKey"
+    try:
+        r = requests.get(_url)
+        if r.ok:
+            if "ERROR" not in r.content.decode("utf-8"):
+                return 1
+            return -1
+        return 0
+    except requests.exceptions.ConnectionError:
+        my_logger.log(TAG, "ERROR: Seems like there is not network connection.")
+        sys.exit(2)
+
+
+def is_virustotal_apikey_valid(api_key):
+    """
+    Makes a request to validate the virustotal api key provided.
+    Returns an int with either one of the following values:
+      1 if is valid
+      0 if could not determinate
+      -1 if is not valid
+    :param api_key:
+    :type api_key: str
+    :return: int
+    """
+    TAG = "ValidatingVirusTotalApiKey"
+    try:
+        _request_url = VIRUS_TOTAL_REPORT_REQUEST_URL
+        _params = {'apikey': api_key, 'resource': MD5_FOR_TESTS}
+        _response = requests.get(_request_url, params=_params)
+        if not _response.ok:
+            return 0, json.loads('{"error": "Network error, couldnt connect with the URL"}')
+        if _response.content == "":
+            return -1, ""
+        return 1, ""
+    except Exception as e:
+        return 0, json.loads('{"error":"' + str(e.args) + '"}')
 
 
 def is_date_valid(date):
@@ -404,7 +890,9 @@ def is_date_valid(date):
     from time import strptime
 
     try:
-        strptime(date, "%Y %m %d")
+        #print("Validating date: " + date)
+        a = strptime(date, "%Y %m %d")
+        #print("Date is: " + str(a))
     except ValueError:
         return False
     return True
@@ -414,39 +902,66 @@ def real_extraction(api_key, starting_date=None, ending_date=None, _output_db=No
                     _type_of_files=None, _download_enabled=None, _register_enabled=None, _continue_downloading=False,
                     _notify_after=None):
 
+    TAG = "Extraction"
+    if starting_date is not None:
+        starting_date = strptime(starting_date, "%Y %m %d")
+    if ending_date is not None:
+        ending_date = strptime(ending_date, "%Y %m %d")
+
     if starting_date is None:
-        starting_date = mktime(strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d"))
+        starting_date = strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d")
     if ending_date is None:
-        ending_date = time()
+        ending_date = gmtime(time())
+
     if _download_enabled is None and _register_enabled is None:
         _register_enabled = True
-    _processing_date = starting_date
+
     if _output_db is None:
-            _output_db = connect_to_database(DB_NAME)
+        my_logger.log(TAG, "Output db is None, using db name: " + DB_ADRESS)
+        _output_db = connect_to_database(DB_ADRESS)
     my_cursor = _output_db.cursor()
     _start_from_this_hash = ""
+
     if _continue_downloading:
+        my_logger.log(TAG, "Continue downloading enabled")
         _get_date_query = "SELECT date_posted, md5 FROM malware WHERE md5 = (SELECT md5 FROM malware WHERE mid = " \
                           "(SELECT MAX(mid) FROM malware))"
         try:
             _last_instance = my_cursor.execute(_get_date_query).fetchone()
+            if _last_instance is None:
+                raise Exception("Last instance is None")
+            my_logger.log(TAG, "Last instance found is: " + str(_last_instance[0]))
             _start_from_this_hash = _last_instance[1]
-            _processing_date = strptime(str(_last_instance[0]))
+            starting_date = strptime(str(_last_instance[0]), "%Y %m %d")
+            my_logger.log(TAG, "Found instances in the db and continue downloading enabled so ignoring previous set starting date")
         except Exception as e:
-            pass
+            my_logger.log(TAG, "Error finding last instance: " + str(e.args))
+            my_logger.log(TAG, "Ignoring continue downloading flag")
+            _continue_downloading = False
+
+    _processing_date = starting_date
     quantity_of_correctly_downloads = 0
     quantity_of_correctly_registered = 0
     proccesed = 0
     counter = 0
-    while mktime(_processing_date) <= ending_date:
+    seconds_of_a_day = 24 * 60 * 60
+    _time_lapse = time()
+    while mktime(_processing_date) <= mktime(ending_date):
+        # print("Processing date: " + asctime(_processing_date))
         l = get_hashlist_from_date(_processing_date.tm_year, _processing_date.tm_mon, _processing_date.tm_mday)
         for _hash in l:
+            # print("Processing hash: " + _hash)
             if _continue_downloading:
+                # print("Continue downloading enabled so Jumping hash: " + _hash)
                 if _hash == _start_from_this_hash:
+                    # print("Continue downloading enabled, found last hash, next will be processed.")
                     _continue_downloading = False
                 continue
-            _result_handling, _m = handle_hash(_hash, _pc_address, api_key, _output_db, _register_enabled, _download_enabled
-                                           , _processing_date, _type_of_files)
+            #_date_to_db = str(_processing_date.tm_year) + " " + str(_processing_date.tm_mon) + " " + str(_processing_date.tm_mday)
+            _date_to_db = strftime(_processing_date)
+            _result_handling, _m = handle_hash(_hash, _pc_address, api_key, _output_db, _register_enabled, _download_enabled, _date_to_db, _type_of_files)
+            # print("Hash handled, result is: " + str(_result_handling))
+            # print("Hash handled, messages are: " + str(_m))
             if _download_enabled and _result_handling['download_ok']:
                 quantity_of_correctly_downloads += 1
             if _register_enabled and _result_handling['register_ok']:
@@ -454,11 +969,14 @@ def real_extraction(api_key, starting_date=None, ending_date=None, _output_db=No
             proccesed += 1
             counter += 1
             if _notify_after is not None:
-                if proccesed == counter:
-                    print("Quantity of successful downloads: " + str(quantity_of_correctly_downloads))
-                    print("Quantity of successful registers: " + str(quantity_of_correctly_registered))
-                    print("Instances processed: " + str(proccesed))
+                if counter == _notify_after:
+                    _time_pause = time() - _time_lapse
+                    my_logger.log(TAG, "Quantity of successful downloads: " + str(quantity_of_correctly_downloads))
+                    my_logger.log(TAG, "Quantity of successful registers: " + str(quantity_of_correctly_registered))
+                    my_logger.log(TAG, "Instances processed: " + str(proccesed) + " in: " + str(_time_pause) + " seconds.")
                     counter = 0
+                    _time_lapse = time()
+        _processing_date = gmtime(mktime(_processing_date) + seconds_of_a_day)
 
 
 def testing_get_extraction_with_defined_date():
@@ -468,131 +986,17 @@ def testing_get_extraction_with_defined_date():
     real_extraction(strptime(_last_date), l)
 
 
-def main(argv):
-    """
-    This method will handle the input parameters and args and validate each of them.
-    Then will pass control to the method real_extraction which do the hard work.
-    :param argv:
-    :return:
-    """
-
-    usage = "mlshrcrawler -s/--starting-date Starting date(%Y %m %d) -e/--ending-date Ending date (%Y %m %d) \n" \
-            "             -o/--output-database Output database address -p/--download-to-address Address in the pc  \n" \
-            "              where to download files -t/--file-type Filter for type of file -h/--help \n" \
-            "              -d/--download This option will enable the download. \n" \
-            "              -r/--register This option will enable the register into db -k/--api-key Api key, \n" \
-            "              -q/--apikey-from-file Address of a file containing the API Key \n" \
-            "              -c/--continue-downloading If specified will look for the last element in the db specified \n" \
-            "              and will continue downloading from the rest elements in that date. -n/--notify-each A number \n" \
-            "              of instances after which the program will notify the status of downloaded and or registered. \n"
-
-    try:
-        opts, args = getopt.getopt(argv, "hs:e:o:p:t:k:q:n:drc", ["help", "starting-date=", "ending-date=",
-                                                               "output-database=", "download-to-address=",
-                                                                 "file-type=", "download", "register",
-                                                                 "api-key=", "apikey-from-file=",
-                                                               "continue-downloading", "notify-each="])
-    except getopt.GetoptError as e:
-        print(e.msg)
-        print("Usage is: " + usage)
-        sys.exit(2)
-
-    _starting_date = None
-    _ending_date = None
-    _output_database = None
-    _hashes_list = []
-    _pc_address_to_download = None
-    _type_of_file = None
-    _download_enabled = None
-    _register_enabled = None
-    _continue_downloading = None
-    _api_key = None
-    _notify_after = None
-    if len(opts) == 0:
-        print(usage)
-        sys.exit(2)
-    for opt, arg in opts:
-        if opt in ("-h", "--help"):
-            print("Usage is: " + usage)
-            sys.exit(1)
-        elif opt in ("-s", "--starting-date"):
-            if not is_date_valid(arg):
-                print("Sorry, seems like date is not valid. Must be in the format %Y %m %d, e.i 2014 04 01")
-                sys.exit(2)
-            first_date_in_malshare = mktime(strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d"))
-            if mktime(strptime(_starting_date, "%Y %m %d")) < first_date_in_malshare:
-                print("The date entered is before the first date in malshare, setting to the first date in malshare: " + FIRST_DATE_IN_MALSHARE)
-                _starting_date = FIRST_DATE_IN_MALSHARE
-            else:
-                _starting_date = arg
-        elif opt in ("-e", "--ending-date"):
-            if not is_date_valid(arg):
-                print("Sorry, seems like date is not valid. Must be in the format %Y %m %d, e.i 2014 04 01")
-                sys.exit(2)
-            _ending_date = arg
-        elif opt in ("-o", "--output-database"):
-            con = connect_to_database(arg)
-            _output_database = con
-        elif opt in ("-p", "--download-to-address"):
-            if not os.path.exists(arg):
-                print("The specified path is wrong")
-                sys.exit(2)
-            _pc_address_to_download = arg
-        elif opt in ("-t", "--file-type"):
-            if _type_of_file not in malshare_types:
-                print("The specified file type is wrong")
-                correct_file_types = ""
-                for file_type in malshare_types:
-                    correct_file_types += " " + file_type
-                print("Correct file types are: " + correct_file_types)
-                sys.exit(2)
-            _type_of_file = arg
-        elif opt in ("-d", "--download"):
-            _download_enabled = True
-        elif opt in ("-r", "--register"):
-            _register_enabled = True
-        elif opt in ("-q", "--apikey-from-file"):
-            try:
-                with open(arg) as _f:
-                    _api_key = _f.read()
-                _valid_api_key = is_apikey_valid(_api_key)
-                if _valid_api_key == 1:
-                    _api_key = arg
-                elif _valid_api_key == 0:
-                    print("Couldn't determinate if the provided api key is valid")
-                    sys.exit(2)
-                elif _valid_api_key == -1:
-                    print("Definitely the api key provided is not valid.")
-                    sys.exit(2)
-            except FileNotFoundError:
-                print("Seems like the file with the api key provided don't exist in that address.")
-                sys.exit(2)
-        elif opt in ("-k", "--api-key"):
-            _valid_api_key = is_apikey_valid(_api_key)
-            if _valid_api_key == 1:
-                _api_key = arg
-            elif _valid_api_key == 0:
-                print("Couldn't determinate if the provided api key is valid")
-                sys.exit(2)
-            elif _valid_api_key == -1:
-                print("Definitely the api key provided is not valid.")
-                sys.exit(2)
-        elif opt in ("-c", "--continue-downloading"):
-            _continue_downloading = True
-        elif opt in ('-n', "--notify-each"):
-            try:
-                _notify_after = int(arg)
-            except ValueError:
-                print("The notify after argument is wrong, must be a number.")
-                sys.exit(2)
-        else:
-            print(usage)
-            sys.exit(2)
-    if _api_key is None:
-        print("You must specify an API key for this program to work.")
-        sys.exit(2)
-    real_extraction(_api_key, _starting_date, _ending_date, _output_database, _pc_address_to_download,
-                    _type_of_file, _download_enabled, _register_enabled, _continue_downloading, _notify_after)
-
 if __name__ == "__main__":
     main(sys.argv[1:])
+#
+# if __name__ == "__main__":
+#     code, js = vt_get_report("e51431ba0e2c49cbbfa247942b3b47d03c475f9d13daaa37a3a58e0466296fc2",
+#                              "00c22bba2c767f5bdc5ea9eaa139e221")
+#     if code == 1:
+#         for _item in js['scans'].items():
+#             print("Antivirus: " + _item[0])
+#             _values = _item[1]
+#             print("\tDetected: " + str(_values['detected']) + "\n")
+#             print("\tVersion: " + _values['version'] + "\n")
+#             print("\tResult: " + str(_values['result']) + "\n")
+#             print("\tUpdate: " + _values['update'] + "\n")

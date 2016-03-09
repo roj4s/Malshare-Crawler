@@ -22,10 +22,10 @@ from logger import Logger
 
 
 class PeFile:
-    def __init__(self, md5, sha1, sha256, sha512, imp_hash, compilation_date, suspicious, pesections,
+    def __init__(self, provided_md5, md5, sha1, sha256, sha512, imp_hash, compilation_date, suspicious, pesections,
                  peimports, peexports):
-        self.md5, self.sha1, self.sha256, self.sha512, self.imp_hash, self.compilation_date, self.suspicious,\
-        self.pesections, self.peimports, self.peexports = md5, sha1, sha256, sha512, imp_hash, compilation_date, \
+        self.provided_md5, self.md5, self.sha1, self.sha256, self.sha512, self.imp_hash, self.compilation_date, self.suspicious,\
+        self.pesections, self.peimports, self.peexports = provided_md5, md5, sha1, sha256, sha512, imp_hash, compilation_date, \
                                                           suspicious, pesections, peimports, peexports
 
 
@@ -64,10 +64,10 @@ class PEDetailer():
         except sqlite3.OperationalError:
             pass
         script = [
-            "CREATE TABLE IF NOT EXISTS pefile(md5 VARCHAR, sha1 VARCHAR , sha256 VARCHAR , sha512 VARCHAR , imp_hash VARCHAR , compilation_date VARCHAR , suspicious INTEGER)",
-            " CREATE TABLE IF NOT EXISTS pesection(nome VARCHAR , tamanho VARCHAR , md5 VARCHAR )",
-            "CREATE TABLE IF NOT EXISTS peimport(md5 VARCHAR , address VARCHAR , nome VARCHAR , dll VARCHAR )",
-            "CREATE TABLE IF NOT EXISTS peexport(md5 VARCHAR , address VARCHAR , nome VARCHAR , ordinal VARCHAR )"
+            "CREATE TABLE IF NOT EXISTS pefile(provided_md5 VARCHAR ,md5 VARCHAR , VARCHAR, sha1 VARCHAR , sha256 VARCHAR , sha512 VARCHAR , imp_hash VARCHAR , compilation_date VARCHAR , suspicious INTEGER)",
+            " CREATE TABLE IF NOT EXISTS pesection(provided_md5 VARCHAR ,nome VARCHAR , tamanho VARCHAR , md5 VARCHAR )",
+            "CREATE TABLE IF NOT EXISTS peimport(provided_md5 VARCHAR ,md5 VARCHAR , address VARCHAR , nome VARCHAR , dll VARCHAR )",
+            "CREATE TABLE IF NOT EXISTS peexport(provided_md5 VARCHAR ,md5 VARCHAR , address VARCHAR , nome VARCHAR , ordinal VARCHAR )"
         ]
         for stmnt in script:
             curs.execute(stmnt)
@@ -83,27 +83,23 @@ class PEDetailer():
         :return: bool
         '''
         cursor = self.pe_db.cursor()
-        cursor.execute("INSERT INTO pefile (md5, sha1, sha256, sha512, imp_hash, compilation_date, suspicious) "
-                       "VALUES(?,?,?,?,?,?,?) ", [pefile_obj.md5, pefile_obj.sha1, pefile_obj.sha256, pefile_obj.sha512,
-                                                    pefile_obj.imp_hash, pefile_obj.compilation_date, pefile_obj.suspicious,
-                                                    ])
+        cursor.execute("INSERT INTO pefile (provided_md5, md5, sha1, sha256, sha512, imp_hash, compilation_date, suspicious) "
+                       "VALUES(?,?,?,?,?,?,?,?) ", [pefile_obj.provided_md5, pefile_obj.md5, pefile_obj.sha1,
+                                                    pefile_obj.sha256, pefile_obj.sha512, pefile_obj.imp_hash,
+                                                    pefile_obj.compilation_date, pefile_obj.suspicious])
         for _section in pefile_obj.pesections:
-            cursor.execute("INSERT INTO pesection(nome, tamanho, md5) VALUES (?,?,?)", [_section['name'], _section['size'],
-                                                                                        pefile_obj.md5])
+            cursor.execute("INSERT INTO pesection(provided_md5,nome, tamanho, md5) VALUES (?,?,?,?)", [
+                pefile_obj.provided_md5, _section['name'], _section['size'], pefile_obj.md5])
         for _import in pefile_obj.peimports:
-            cursor.execute("INSERT INTO peimport(md5, address, nome, dll) VALUES (?, ?, ?, ?)", [pefile_obj.md5,
-                                                                                                 _import['address'],
-                                                                                                 _import['name'],
-                                                                                                 _import['dll']])
+            cursor.execute("INSERT INTO peimport(provided_md5,md5, address, nome, dll) VALUES (?, ?, ?, ?, ?)", [
+                pefile_obj.provided_md5, pefile_obj.md5, _import['address'], _import['name'], _import['dll']])
 
         for _export in pefile_obj.peexports:
-            cursor.execute("INSERT INTO peexport(md5, address, nome, ordinal) VALUES (?,?,?,?)", [pefile_obj.md5,
-                                                                                                  _export['address'],
-                                                                                                  _export['name'],
-                                                                                                  _export['ordinal']])
+            cursor.execute("INSERT INTO peexport(provided_md5,md5, address, nome, ordinal) VALUES (?,?,?,?,?)", [
+                pefile_obj.provided_md5, pefile_obj.md5, _export['address'], _export['name'], _export['ordinal']])
         self.pe_db.commit()
 
-    def analyse_pe_file(self, file):
+    def analyse_pe_file(self, file, provided_md5):
         TAG = "Analysing PE File"
         self.logger.log(TAG, file)
         if not os.path.exists(file):
@@ -170,8 +166,8 @@ class PEDetailer():
             except:
                 pass
 
-            self.insert_pe_file(PeFile(md5,sha1,sha256,sha512,imp_hash, compilation_date, suspicious,_pesections,
-                                       _peimports, _peexports))
+            self.insert_pe_file(PeFile(provided_md5, md5, sha1, sha256, sha512, imp_hash, compilation_date, suspicious,
+                                       _pesections, _peimports, _peexports))
             self.logger.log(TAG, "PE file details inserted succesfully")
             return True, "PE file details inserted succesfully"
         else:

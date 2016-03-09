@@ -26,6 +26,9 @@ except (AttributeError, ImportError):
 malshare_types = "HTML", "PE32", "Zip"
 malshare_api_keys = list()
 current_malshare_api_key_index = -1
+virus_total_api_keys = list()
+virustotal_api_key = None
+current_virus_total_api_key_index = -1
 DB_ADRESS = "malshare.db"
 PE_DB = "pedb"
 FIRST_DATE_IN_MALSHARE = "2013 04 06"
@@ -68,7 +71,7 @@ def main(argv):
             "              -v/--last-24h-virus-scan Iniside an infinite loop will download last 24 hours found viruses \n " \
             "              on malshare dataset, send it to virustotal and register the virus metadata and  results of \n" \
             "              the scan. -w/--virustotal-apikey Virus total api key, -a/--virustotal-apikey-fromfile Load \n" \
-            "              Virus total api key from specified file address. \n" \
+            "              one or many virus total api keys from specified file address, each api key in the file separated by line jumps. \n" \
             "              -f/--verbose-to-file Print results of any operation to file" \
 
     try:
@@ -163,14 +166,16 @@ def main(argv):
                     _malshare_api_key = _f.read()
                 #print("Api key found is: " + _api_key)
                 global malshare_api_keys
-                malshare_api_keys.extend(_malshare_api_key.split("\n"))
+                _keys = _malshare_api_key.split("\n")
                 # while "\n" in _malshare_api_key:
                 #     _malshare_api_key = _malshare_api_key[:len(_malshare_api_key) - 1]
-                for _api_key in malshare_api_keys:
+                for _api_key in _keys:
                     if _api_key.strip() == "":
                         continue
                     print("ValidatingApiKey: " + _api_key)
                     _valid_api_key = is_apikey_valid(_api_key)
+                    if _valid_api_key == 1:
+                        malshare_api_keys.append(_api_key)
                     if _valid_api_key == 0:
                         print("Couldn't determinate if the provided api key is valid")
                         sys.exit(2)
@@ -205,33 +210,48 @@ def main(argv):
         elif opt in ('-v', '--last-24h-virus-scan'):
             _loop24h_virus_scan = True
         elif opt in ('-w', '--virustotal-apikey'):
-            _valid_api_key = is_virustotal_apikey_valid(arg)
+            _valid_api_key,_ = is_virustotal_apikey_valid(arg)
+            global virus_total_api_keys
+            global current_virus_total_api_key_index
+            global virustotal_api_key
             if _valid_api_key == 1:
-                _virus_total_api_key = arg
+                virus_total_api_keys.append(arg)
             elif _valid_api_key == 0:
                 print("Couldn't determinate if the provided api key is valid")
                 sys.exit(2)
             elif _valid_api_key == -1:
                 print("Definitely the api key provided is not valid.")
                 sys.exit(2)
+            current_virus_total_api_key_index = 0
+            virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
         elif opt in ('-f', '--verbose-to-file'):
             global my_logger
             my_logger = Logger(arg)
         elif opt in ('-a', '--virustotal-apikey-fromfile'):
+            global virus_total_api_keys
+            global current_virus_total_api_key_index
+            global virustotal_api_key
             try:
                 with open(arg) as _f:
-                    _virus_total_api_key = _f.read()
-                while "\n" in _virus_total_api_key:
-                    _virus_total_api_key = _virus_total_api_key[:len(_virus_total_api_key) - 1]
-                _valid_api_key = is_virustotal_apikey_valid(_virus_total_api_key)
-                if _valid_api_key == 0:
-                    print("Couldn't determinate if the provided api key is valid")
-                    sys.exit(2)
-                elif _valid_api_key == -1:
-                    print("Definitely the api key provided is not valid.")
-                    sys.exit(2)
-            except FileNotFoundError:
-                print("Seems like the file with the api key provided don't exist in that address.")
+                    _read_keys = _f.read()
+
+                for _key in _read_keys.split('\n'):
+                    if _key.strip() == "":
+                        continue
+                    _valid_api_key = is_virustotal_apikey_valid(_key)
+                    if _valid_api_key == 1:
+                        virus_total_api_keys.append(_key)
+                    if _valid_api_key == 0:
+                        print("Couldn't determinate if the provided api key is valid")
+                        sys.exit(2)
+                    elif _valid_api_key == -1:
+                        print("Definitely the api key provided is not valid.")
+                        sys.exit(2)
+                current_virus_total_api_key_index = 0
+                virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
+            except Exception:
+                print("Seems like the file with the api key provided don't exist in that address or the keys are not"
+                      " well writen into the file.")
                 sys.exit(2)
         else:
             print(usage)
@@ -240,11 +260,11 @@ def main(argv):
         print("You must specify an API key for this program to work.")
         sys.exit(2)
     if _loop24h_virus_scan:
-        if _virus_total_api_key is None:
+        if current_virus_total_api_key_index < 0:
             print("Must specify VirusTotal api key.")
             print(usage)
             sys.exit(2)
-        if _malshare_api_key is None:
+        if current_malshare_api_key_index < 0:
             print("Must specify Malshare api key.")
             print(usage)
             sys.exit(2)
@@ -256,7 +276,7 @@ def main(argv):
             print("Must specify a database address.")
             print(usage)
             sys.exit(2)
-        virustotal_analysis(_virus_total_api_key, _pc_address_to_download, _output_database_handler,
+        virustotal_analysis(_pc_address_to_download, _output_database_handler,
                             _output_database_address)
     else:
         real_extraction(_malshare_api_key, _starting_date, _ending_date, _output_database_address,
@@ -748,7 +768,20 @@ def set_new_malshare_api_key_index():
         current_malshare_api_key_index = current_malshare_api_key_index + 1
 
 
-def virustotal_analysis(virustotal_api_key, malshare_output_folder, output_db_handler,
+def set_new_virustotal_api_key_index():
+    global current_virus_total_api_key_index
+    global virus_total_api_keys
+    global virustotal_api_key
+
+    if current_virus_total_api_key_index == len(virus_total_api_keys) - 1:
+        current_virus_total_api_key_index = 0
+    else:
+        current_virus_total_api_key_index = current_virus_total_api_key_index + 1
+
+    virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
+
+
+def virustotal_analysis(malshare_output_folder, output_db_handler,
                         db_file_address):
     """
     This method will retrieve the last files posted on malshare and send those previously not handled
@@ -760,6 +793,7 @@ def virustotal_analysis(virustotal_api_key, malshare_output_folder, output_db_ha
     :param virustotal_analysis_output_folder:
     :return:
     """
+    global virustotal_api_key
     malshare_api_key = malshare_api_keys[current_malshare_api_key_index]
     TAG = "VirusTotalScanMain,"
     _api_request = "http://malshare.com/api.php?api_key=" + malshare_api_key + "&action=getlist"
@@ -816,8 +850,8 @@ def virustotal_analysis(virustotal_api_key, malshare_output_folder, output_db_ha
 
                     if result_code == -1:
                         my_logger.log(TAG, "Might got reached the requests on one minute limit by virus total API.")
-                        my_logger.log(TAG, "Will sleep for 60 seconds.")
-                        sleep(60)
+                        my_logger.log(TAG, "Will use the next virustotal api key in the list.")
+                        set_new_virustotal_api_key_index()
 
                     if result_code == -2:
                         my_logger.log(TAG, "File already queued for analysis.")

@@ -153,7 +153,9 @@ class PEDetailer():
                 if pe.DIRECTORY_ENTRY_IMPORT:
                     for entry in pe.DIRECTORY_ENTRY_IMPORT:
                         for imp in entry.imports:
-                            _import = {"address": hex(imp.address), "name": imp.name, "dll": entry.dll}
+                            _hex_adress = hex(imp.address)
+                            _address = _hex_adress.decode('utf-8')
+                            _import = {"address": _address, "name": imp.name, "dll": entry.dll}
                             _peimports.append(_import)
             except:
                 pass
@@ -161,7 +163,9 @@ class PEDetailer():
             try:
                 if pe.IMAGE_DIRECTORY_ENTRY_EXPORT.symbols:
                     for exp in pe.IMAGE_DIRECTORY_ENTRY_EXPORT.symbols:
-                        _peexports.append({"address": hex(pe.OPTIONAL_HEADER.ImageBase + exp.address), "name": exp.name,
+                        _hex_adress = hex(pe.OPTIONAL_HEADER.ImageBase + exp.address)
+                        _address = _hex_adress.decode('utf-8')
+                        _peexports.append({"address": _address, "name": exp.name,
                                            "ordinal": exp.ordinal})
             except:
                 pass

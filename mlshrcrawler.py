@@ -808,11 +808,16 @@ def virustotal_analysis(virustotal_api_key, malshare_output_folder, output_db_ha
                         if insertion_successfull:
                             _processed_instances.add(_hash)
 
-                    if result_code == 0 or result_code == -1:
+                    if result_code == 0:
                         my_logger.log(TAG, "Dont exist report so sending file to scan.")
                         _file_to_scan = os.path.join(malshare_output_folder, _hash)
                         #Thread(target=vt_file_scan, name=_hash, args=[virustotal_api_key, _file_to_scan, db_file_address]).start()
                         vt_file_scan(virustotal_api_key, _file_to_scan, output_db_handler)
+
+                    if result_code == -1:
+                        my_logger.log(TAG, "Might got reached the requests on one minute limit by virus total API.")
+                        my_logger.log(TAG, "Will sleep for 60 seconds.")
+                        sleep(60)
 
                     if result_code == -2:
                         my_logger.log(TAG, "File already queued for analysis.")

@@ -57,7 +57,11 @@ def main(argv):
     :param argv:
     :return:
     """
-
+    global virus_total_api_keys
+    global current_virus_total_api_key_index
+    global virustotal_api_key
+    global malshare_api_keys
+    global current_malshare_api_key_index
 
     usage = "mlshrcrawler -s/--starting-date Starting date(%Y %m %d) -e/--ending-date Ending date (%Y %m %d) \n" \
             "             -o/--output-database Output database address -p/--download-to-address Address in the pc  \n" \
@@ -165,7 +169,7 @@ def main(argv):
                 with open(arg) as _f:
                     _malshare_api_key = _f.read()
                 #print("Api key found is: " + _api_key)
-                global malshare_api_keys
+
                 _keys = _malshare_api_key.split("\n")
                 # while "\n" in _malshare_api_key:
                 #     _malshare_api_key = _malshare_api_key[:len(_malshare_api_key) - 1]
@@ -182,7 +186,7 @@ def main(argv):
                     elif _valid_api_key == -1:
                         print("Definitely the api key provided is not valid.")
                         sys.exit(2)
-                global current_malshare_api_key_index
+
                 current_malshare_api_key_index = 0
             except FileNotFoundError:
                 print("Seems like the file with the api key provided don't exist in that address.")
@@ -211,9 +215,7 @@ def main(argv):
             _loop24h_virus_scan = True
         elif opt in ('-w', '--virustotal-apikey'):
             _valid_api_key,_ = is_virustotal_apikey_valid(arg)
-            global virus_total_api_keys
-            global current_virus_total_api_key_index
-            global virustotal_api_key
+
             if _valid_api_key == 1:
                 virus_total_api_keys.append(arg)
             elif _valid_api_key == 0:
@@ -228,9 +230,7 @@ def main(argv):
             global my_logger
             my_logger = Logger(arg)
         elif opt in ('-a', '--virustotal-apikey-fromfile'):
-            global virus_total_api_keys
-            global current_virus_total_api_key_index
-            global virustotal_api_key
+
             try:
                 with open(arg) as _f:
                     _read_keys = _f.read()
@@ -238,7 +238,7 @@ def main(argv):
                 for _key in _read_keys.split('\n'):
                     if _key.strip() == "":
                         continue
-                    _valid_api_key = is_virustotal_apikey_valid(_key)
+                    _valid_api_key,_ = is_virustotal_apikey_valid(_key)
                     if _valid_api_key == 1:
                         virus_total_api_keys.append(_key)
                     if _valid_api_key == 0:
@@ -249,7 +249,8 @@ def main(argv):
                         sys.exit(2)
                 current_virus_total_api_key_index = 0
                 virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
-            except Exception:
+            except Exception as vte:
+                print("Error Validating VirusTotal Keys is: " + str(vte.args))
                 print("Seems like the file with the api key provided don't exist in that address or the keys are not"
                       " well writen into the file.")
                 sys.exit(2)
@@ -945,13 +946,17 @@ def is_apikey_valid(api_key):
     """
     _url = "http://malshare.com/api.php?api_key=" + api_key + "&action=getlist"
     TAG = "ValidatingMalshareApiKey"
+    my_logger.log(TAG, "Api_key is : " + api_key)
     try:
         r = requests.get(_url)
         if r.ok:
             #my_logger.log(TAG, "Response is: " + str(r.content))
             if "ERROR" not in r.content.decode("utf-8"):
+                my_logger.log(TAG, "Api key is valid.")
                 return 1
+            my_logger.log(TAG, "APi key is not valid")
             return -1
+        my_logger.log(TAG, "Api key is not valid.")
         return 0
     except requests.exceptions.ConnectionError:
         my_logger.log(TAG, "ERROR: Seems like there is not network connection.")
@@ -970,16 +975,21 @@ def is_virustotal_apikey_valid(api_key):
     :return: int
     """
     TAG = "ValidatingVirusTotalApiKey"
+    my_logger.log(TAG, "API key is: " + api_key)
     try:
         _request_url = VIRUS_TOTAL_REPORT_REQUEST_URL
         _params = {'apikey': api_key, 'resource': MD5_FOR_TESTS}
         _response = requests.get(_request_url, params=_params)
         if not _response.ok:
+            my_logger.log(TAG, "Network error, couldnt connect with the URL")
             return 0, json.loads('{"error": "Network error, couldnt connect with the URL"}')
         if _response.content == "":
+            my_logger.log(TAG, "Api key is not valid.")
             return -1, ""
+        my_logger.log(TAG, "Api key is valid.")
         return 1, ""
     except Exception as e:
+        my_logger.log(TAG, "ERROR: " + str(e.args))
         return 0, json.loads('{"error":"' + str(e.args) + '"}')
 
 

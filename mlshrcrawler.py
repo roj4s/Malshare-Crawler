@@ -423,7 +423,6 @@ def download_file(_file_hash, destination):
         my_logger.log(TAG, _response)
         set_new_malshare_api_key_index()
         return download_file(_file_hash, destination)
-        return False, _response
     if 'not activated' in _response:
         my_logger.log(TAG, _response)
         return False, "Wrong api key"
@@ -488,6 +487,7 @@ def handle_hash(file_hash, destination_folder=".", _db_handler=None,
             _result_messages .append(_download_result[1])
             if _download_correct:
                 magic_file_type = magic.from_file(_download_to)
+                magic_file_type = magic_file_type.decode('utf-8')
                 # print(TAG + "File downloaded successfully.")
                 _download_date = gmtime(time())
                 _download_date_to_db = asctime(_download_date)

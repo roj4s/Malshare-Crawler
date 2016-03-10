@@ -110,6 +110,7 @@ def main(argv):
     _notify_after = None
     _loop24h_virus_scan = False
     _verbose_to_file = None
+    recent_virus_analysis_continue_from_existent_data = False
     if len(opts) == 0:
         print(usage)
         sys.exit(2)
@@ -138,6 +139,8 @@ def main(argv):
             if mktime(strptime(_ending_date, "%Y %m %d")) > _now:
                 print("The date entered is after today, setting to today: " + strftime(_now))
         elif opt in ("-o", "--output-database"):
+            if os.path.exists(arg):
+                recent_virus_analysis_continue_from_existent_data = True
             con = connect_to_database(arg)
             _output_database_handler = con
             _output_database_address = arg
@@ -278,7 +281,7 @@ def main(argv):
             print(usage)
             sys.exit(2)
         virustotal_analysis(_pc_address_to_download, _output_database_handler,
-                            _output_database_address)
+                            _output_database_address, recent_virus_analysis_continue_from_existent_data)
     else:
         real_extraction(_malshare_api_key, _starting_date, _ending_date, _output_database_address,
                         _pc_address_to_download, _type_of_file, _download_enabled, _register_enabled,
@@ -782,8 +785,21 @@ def set_new_virustotal_api_key_index():
     virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
 
 
-def virustotal_analysis(malshare_output_folder, output_db_handler,
-                        db_file_address):
+def get_list_of_inserted_hashes(db_handler):
+    _sql = "SELECT md5 FROM malware"
+    _cursor = db_handler.cursor()
+    all = _cursor.execute(_sql).fetchall()
+    return [x[0] for x in all]
+
+
+def get_list_of_hashes_which_analysis_was_already_obtained(db_handler):
+    _sql = "SELECT md5 FROM vtscan"
+    _cursor = db_handler.cursor()
+    all = _cursor.execute(_sql).fetchall()
+    return [x[0] for x in all]
+
+
+def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_address, continue_from_existent_data = False):
     """
     This method will retrieve the last files posted on malshare and send those previously not handled
     to virustotal for analysis. The analysis results will be dumped to virustotal_analysis_output_folder, the downloaded
@@ -800,9 +816,15 @@ def virustotal_analysis(malshare_output_folder, output_db_handler,
     _api_request = "http://malshare.com/api.php?api_key=" + malshare_api_key + "&action=getlist"
     _files_inserted_already = set()
     _processed_instances = set()
+    if continue_from_existent_data:
+        my_logger.log(TAG, "Continuing from existent data.")
+        _files_inserted_already.update(get_list_of_inserted_hashes(output_db_handler))
+        _processed_instances.update(get_list_of_hashes_which_analysis_was_already_obtained(output_db_handler))
+        my_logger.log(TAG, "Now _files_inserted_already list size is: " + str(len(_files_inserted_already)))
+        my_logger.log(TAG, "Now _processed_instances list size is: " + str(len(_processed_instances)))
     _seen_hashes = set()
-    _threads_getting_reports = dict()
-    _threads_sending_files_to_scan = dict()
+    # _threads_getting_reports = dict()
+    # _threads_sending_files_to_scan = dict()
     running = True
     iterations = 0
     while running:
@@ -822,6 +844,9 @@ def virustotal_analysis(malshare_output_folder, output_db_handler,
                 if _hash.strip() == "":
                     my_logger.log(TAG, "Hash is empty space skiping")
                 if _hash.strip() != "":
+                    if _hash in _files_inserted_already:
+                        my_logger.log(TAG, "Hash was already handled, it might be a hash that was sent to analysis or "
+                                           "its iterating over an existent db.")
                     if _hash not in _files_inserted_already:
                         _success, msg = handle_hash(_hash, malshare_output_folder, output_db_handler, True, True,
                                                     _processing_date, None, db_file_address)
@@ -829,8 +854,7 @@ def virustotal_analysis(malshare_output_folder, output_db_handler,
                         if _success:
                             my_logger.log(TAG, "Succesfully processed hash, now will get report.")
                             _files_inserted_already.add(_hash)
-                    if _hash in _files_inserted_already:
-                        my_logger.log(TAG, "Hash was already handled, it might be a hash that was sent to analysis.")
+
                     try:
                         result_code, _js = vt_get_report(virustotal_api_key, _hash)
                         my_logger.log(TAG , "Result code is: " + str(result_code))
@@ -846,6 +870,10 @@ def virustotal_analysis(malshare_output_folder, output_db_handler,
                     if result_code == 0:
                         my_logger.log(TAG, "Dont exist report so sending file to scan.")
                         _file_to_scan = os.path.join(malshare_output_folder, _hash)
+                        if os.path.getsize(_file_to_scan)/1000.0/1000.0 > 32:
+                            my_logger.log(TAG, "File bigger than 32MB can't be sent to VirusTotal")
+                            _processed_instances.add(_hash)
+                            continue
                         #Thread(target=vt_file_scan, name=_hash, args=[virustotal_api_key, _file_to_scan, db_file_address]).start()
                         vt_file_scan(virustotal_api_key, _file_to_scan, output_db_handler)
 

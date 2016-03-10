@@ -24,6 +24,7 @@ except (AttributeError, ImportError):
     pass
 
 malshare_types = "HTML", "PE32", "Zip"
+SECONDS_OF_A_DAY = 24 * 60 * 60
 malshare_api_keys = list()
 current_malshare_api_key_index = -1
 virus_total_api_keys = list()
@@ -76,16 +77,18 @@ def main(argv):
             "              on malshare dataset, send it to virustotal and register the virus metadata and  results of \n" \
             "              the scan. -w/--virustotal-apikey Virus total api key, -a/--virustotal-apikey-fromfile Load \n" \
             "              one or many virus total api keys from specified file address, each api key in the file separated by line jumps. \n" \
-            "              -f/--verbose-to-file Print results of any operation to file" \
+            "              -f/--verbose-to-file Print results of any operation to file \n" \
+            "              -m/--virustotal-analysis-date-constrain." \
 
     try:
-        opts, args = getopt.getopt(argv, "hs:e:o:p:t:k:q:n:drcvw:a:f:", ["help", "starting-date=", "ending-date=",
+        opts, args = getopt.getopt(argv, "hs:e:o:p:t:k:q:n:drcvw:a:f:m", ["help", "starting-date=", "ending-date=",
                                                                "output-database=", "download-to-address=",
                                                                  "file-type=", "download", "register",
                                                                  "api-key=", "apikey-from-file=",
                                                                "continue-downloading", "notify-each=",
                                                                "last-24h-virus-scan", "virustotal-apikey=",
-                                                               "virustotal-apikey-fromfile=,verbose-to-file="])
+                                                               "virustotal-apikey-fromfile=,verbose-to-file=",
+                                                               "virustotal-analysis-date-constrain"])
         # print("Args is : " + str(args))
         # print("Opts is : " + str(opts))
         # print("Args is : " + str(args))
@@ -96,6 +99,9 @@ def main(argv):
         sys.exit(2)
 
     _starting_date = None
+    _virustotal_analysis_starting_date = strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d")
+    _virustotal_analysis_ending_date = gmtime(time() - SECONDS_OF_A_DAY)
+    _virustotal_analysis_data_constrain = False
     _ending_date = None
     _output_database_address = None
     _output_database_handler = None
@@ -124,6 +130,8 @@ def main(argv):
                 print("Sorry, seems like date is not valid. Must be in the format %Y %m %d, e.i 2014 04 01")
                 sys.exit(2)
             _starting_date = _date
+            _virustotal_analysis_starting_date = strptime(arg, "%Y %m %d")
+            _virustotal_analysis_data_constrain = True
             first_date_in_malshare = mktime(strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d"))
             if mktime(strptime(_starting_date, "%Y %m %d")) < first_date_in_malshare:
                 print("The date entered is before the first date in malshare, setting to the first date in malshare: " + FIRST_DATE_IN_MALSHARE)
@@ -135,6 +143,8 @@ def main(argv):
                 print("Sorry, seems like date is not valid. Must be in the format %Y %m %d, e.i 2014 04 01")
                 sys.exit(2)
             _ending_date = _date
+            _virustotal_analysis_ending_date = strptime(arg, "%Y %m %d")
+            _virustotal_analysis_data_constrain = True
             _now = time()
             if mktime(strptime(_ending_date, "%Y %m %d")) > _now:
                 print("The date entered is after today, setting to today: " + strftime(_now))
@@ -166,6 +176,8 @@ def main(argv):
             _download_enabled = True
         elif opt in ("-r", "--register"):
             _register_enabled = True
+        elif opt in ("-m", "--virustotal-analysis-date-constrain"):
+            _virustotal_analysis_data_constrain = True
         elif opt in ("-q", "--apikey-from-file"):
             #print("Api key from file")
             try:
@@ -280,8 +292,21 @@ def main(argv):
             print("Must specify a database address.")
             print(usage)
             sys.exit(2)
+        if _virustotal_analysis_data_constrain:
+            if mktime(_virustotal_analysis_starting_date > _virustotal_analysis_ending_date):
+                print("ERROR: " + "Specified starting date is bigger than specified ending date.")
+                sys.exit(2)
+            mlsh_firstdate = strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d")
+            if _virustotal_analysis_starting_date.tm_year < mlsh_firstdate.tm_year:
+                print("ERROR: " + "No data on malshare for the specified date.")
+                sys.exit(2)
+            if mktime(_virustotal_analysis_ending_date) > time():
+                print("ERROR: " + "Specified ending date has not occured yet is after current date.")
+                sys.exit()
         virustotal_analysis(_pc_address_to_download, _output_database_handler,
-                            _output_database_address, recent_virus_analysis_continue_from_existent_data)
+                            _output_database_address, recent_virus_analysis_continue_from_existent_data,
+                            _virustotal_analysis_starting_date, _virustotal_analysis_ending_date,
+                            _virustotal_analysis_data_constrain)
     else:
         real_extraction(_malshare_api_key, _starting_date, _ending_date, _output_database_address,
                         _pc_address_to_download, _type_of_file, _download_enabled, _register_enabled,
@@ -799,7 +824,10 @@ def get_list_of_hashes_which_analysis_was_already_obtained(db_handler):
     return [x[0] for x in all]
 
 
-def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_address, continue_from_existent_data = False):
+def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_address, continue_from_existent_data=False,
+                        starting_date=strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d"), ending_date=gmtime(time() -
+                                                                                                       SECONDS_OF_A_DAY)
+                        , date_constrain=False):
     """
     This method will retrieve the last files posted on malshare and send those previously not handled
     to virustotal for analysis. The analysis results will be dumped to virustotal_analysis_output_folder, the downloaded
@@ -812,6 +840,7 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
     """
     global virustotal_api_key
     malshare_api_key = malshare_api_keys[current_malshare_api_key_index]
+    current_processing_date = starting_date
     TAG = "VirusTotalScanMain,"
     _api_request = "http://malshare.com/api.php?api_key=" + malshare_api_key + "&action=getlist"
     _files_inserted_already = set()
@@ -820,8 +849,12 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
         my_logger.log(TAG, "Continuing from existent data.")
         _files_inserted_already.update(get_list_of_inserted_hashes(output_db_handler))
         _processed_instances.update(get_list_of_hashes_which_analysis_was_already_obtained(output_db_handler))
+        if date_constrain:
+            current_processing_date = strptime(get_last_date_inserted(db_file_address))
         my_logger.log(TAG, "Now _files_inserted_already list size is: " + str(len(_files_inserted_already)))
         my_logger.log(TAG, "Now _processed_instances list size is: " + str(len(_processed_instances)))
+        if date_constrain:
+            my_logger.log(TAG, "Continuing from last date in db: " + asctime(current_processing_date))
     _seen_hashes = set()
     # _threads_getting_reports = dict()
     # _threads_sending_files_to_scan = dict()
@@ -831,13 +864,20 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
         my_logger.log(TAG, "Iteration: " + str(iterations))
         iterations += 1
         # try:
-        _req = requests.get(_api_request).content.decode("utf-8")
-        _hashes = _req.split('<br>')
+        if not date_constrain:
+            _req = requests.get(_api_request).content.decode("utf-8")
+            _hashes = _req.split('<br>')
+        else:
+            _hashes = get_hashlist_from_date(current_processing_date.tm_year, current_processing_date.tm_mon,
+                                             current_processing_date.tm_mday)
         _seen_hashes.update(set(_hashes))
         _dif = _seen_hashes.difference(_processed_instances)
         #logger.log(TAG, "Different hashes: " + str(_dif))
         if len(_dif) > 0:
-            _processing_date = asctime(gmtime(time()))
+            if date_constrain:
+                _processing_date = asctime(current_processing_date)
+            else:
+                _processing_date = asctime(gmtime(time()))
             my_logger.log(TAG, "Processing date is : " + _processing_date)
             for _hash in _dif:
                 my_logger.log(TAG, "Processing hash: " + _hash)
@@ -884,6 +924,13 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
 
                     if result_code == -2:
                         my_logger.log(TAG, "File already queued for analysis.")
+
+            if date_constrain:
+                if current_processing_date.tm_year == ending_date.tm_year and current_processing_date.tm_mon == ending_date.tm_mon and current_processing_date.tm_mday == ending_date.tm_mday:
+                    my_logger.log(TAG, "Reached ending date so returning and ending loop.")
+                    return
+                    sys.exit(1)
+                current_processing_date = gmtime(mktime(current_processing_date) + SECONDS_OF_A_DAY)
                             # _thread = Thread(name=_hash, target=vt_get_report_until_ready, args=[virustotal_api_key,
                             #                                                                     scanid,
                             #                                                                     db_file_address])

@@ -293,7 +293,7 @@ def main(argv):
             print(usage)
             sys.exit(2)
         if _virustotal_analysis_data_constrain:
-            if mktime(_virustotal_analysis_starting_date > _virustotal_analysis_ending_date):
+            if mktime(_virustotal_analysis_starting_date) > mktime(_virustotal_analysis_ending_date):
                 print("ERROR: " + "Specified starting date is bigger than specified ending date.")
                 sys.exit(2)
             mlsh_firstdate = strptime(FIRST_DATE_IN_MALSHARE, "%Y %m %d")
@@ -850,7 +850,7 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
         _files_inserted_already.update(get_list_of_inserted_hashes(output_db_handler))
         _processed_instances.update(get_list_of_hashes_which_analysis_was_already_obtained(output_db_handler))
         if date_constrain:
-            current_processing_date = strptime(get_last_date_inserted(db_file_address))
+            current_processing_date = strptime(get_last_date_inserted(output_db_handler))
         my_logger.log(TAG, "Now _files_inserted_already list size is: " + str(len(_files_inserted_already)))
         my_logger.log(TAG, "Now _processed_instances list size is: " + str(len(_processed_instances)))
         if date_constrain:

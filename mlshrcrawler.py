@@ -880,6 +880,8 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
                 _processing_date = asctime(gmtime(time()))
             my_logger.log(TAG, "Processing date is : " + _processing_date)
             for _hash in _dif:
+                if "tmp/" in _hash:
+                    _hash = _hash.split('/')[-1].strip()
                 my_logger.log(TAG, "Processing hash: " + _hash)
                 if _hash.strip() == "":
                     my_logger.log(TAG, "Hash is empty space skiping")

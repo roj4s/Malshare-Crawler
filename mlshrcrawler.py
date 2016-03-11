@@ -25,9 +25,10 @@ except (AttributeError, ImportError):
 
 malshare_types = "HTML", "PE32", "Zip"
 SECONDS_OF_A_DAY = 24 * 60 * 60
-malshare_api_keys = list()
+malshare_api_key = None
 current_malshare_api_key_index = -1
-virus_total_api_keys = list()
+virustotal_apikeys_file_address = None
+malshare_apikeys_file_address = None
 virustotal_api_key = None
 current_virus_total_api_key_index = -1
 DB_ADRESS = "malshare.db"
@@ -58,11 +59,13 @@ def main(argv):
     :param argv:
     :return:
     """
-    global virus_total_api_keys
+
     global current_virus_total_api_key_index
     global virustotal_api_key
-    global malshare_api_keys
+    global malshare_api_key
     global current_malshare_api_key_index
+    global malshare_apikeys_file_address
+    global virustotal_apikeys_file_address
 
     usage = "mlshrcrawler -s/--starting-date Starting date(%Y %m %d) -e/--ending-date Ending date (%Y %m %d) \n" \
             "             -o/--output-database Output database address -p/--download-to-address Address in the pc  \n" \
@@ -179,44 +182,17 @@ def main(argv):
         elif opt in ("-m", "--virustotal-analysis-date-constrain"):
             _virustotal_analysis_data_constrain = True
         elif opt in ("-q", "--apikey-from-file"):
-            #print("Api key from file")
-            try:
-                with open(arg) as _f:
-                    _malshare_api_key = _f.read()
-                #print("Api key found is: " + _api_key)
-
-                _keys = _malshare_api_key.split("\n")
-                # while "\n" in _malshare_api_key:
-                #     _malshare_api_key = _malshare_api_key[:len(_malshare_api_key) - 1]
-                for _api_key in _keys:
-                    if _api_key.strip() == "":
-                        continue
-                    print("ValidatingApiKey: " + _api_key)
-                    _valid_api_key = is_apikey_valid(_api_key)
-                    if _valid_api_key == 1:
-                        malshare_api_keys.append(_api_key)
-                    if _valid_api_key == 0:
-                        print("Couldn't determinate if the provided api key is valid")
-                        sys.exit(2)
-                    elif _valid_api_key == -1:
-                        print("Definitely the api key provided is not valid.")
-                        sys.exit(2)
-
-                current_malshare_api_key_index = 0
-            except FileNotFoundError:
-                print("Seems like the file with the api key provided don't exist in that address.")
+            if os.path.exists(arg):
+                malshare_apikeys_file_address = arg
+            else:
+                print("The specified malshare api keys file address doesn't exists.")
                 sys.exit(2)
+
         elif opt in ("-k", "--api-key"):
-            _valid_api_key = is_apikey_valid(arg)
-            if _valid_api_key == 1:
-                # _malshare_api_key = arg
-                malshare_api_keys.append(arg)
-                current_malshare_api_key_index = 0
-            elif _valid_api_key == 0:
-                print("Couldn't determinate if the provided api key is valid")
-                sys.exit(2)
-            elif _valid_api_key == -1:
-                print("Definitely the api key provided is not valid.")
+            if is_apikey_valid(arg):
+                malshare_api_key = arg
+            else:
+                print("Specified malshare api key is not valid.")
                 sys.exit(2)
         elif opt in ("-c", "--continue-downloading"):
             _continue_downloading = True
@@ -230,9 +206,8 @@ def main(argv):
             _loop24h_virus_scan = True
         elif opt in ('-w', '--virustotal-apikey'):
             _valid_api_key,_ = is_virustotal_apikey_valid(arg)
-
             if _valid_api_key == 1:
-                virus_total_api_keys.append(arg)
+                virustotal_api_key = (arg)
             elif _valid_api_key == 0:
                 print("Couldn't determinate if the provided api key is valid")
                 sys.exit(2)
@@ -240,48 +215,24 @@ def main(argv):
                 print("Definitely the api key provided is not valid.")
                 sys.exit(2)
             current_virus_total_api_key_index = 0
-            virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
         elif opt in ('-f', '--verbose-to-file'):
             global my_logger
             my_logger = Logger(arg)
         elif opt in ('-a', '--virustotal-apikey-fromfile'):
 
-            try:
-                with open(arg) as _f:
-                    _read_keys = _f.read()
-
-                for _key in _read_keys.split('\n'):
-                    if _key.strip() == "":
-                        continue
-                    _valid_api_key,_ = is_virustotal_apikey_valid(_key)
-                    if _valid_api_key == 1:
-                        virus_total_api_keys.append(_key)
-                    if _valid_api_key == 0:
-                        print("Couldn't determinate if the provided api key is valid")
-                        sys.exit(2)
-                    elif _valid_api_key == -1:
-                        print("Definitely the api key provided is not valid.")
-                        sys.exit(2)
-                current_virus_total_api_key_index = 0
-                virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
-            except Exception as vte:
-                print("Error Validating VirusTotal Keys is: " + str(vte.args))
-                print("Seems like the file with the api key provided don't exist in that address or the keys are not"
-                      " well writen into the file.")
-                sys.exit(2)
+            if os.path.exists(arg):
+                virustotal_apikeys_file_address = arg
+            else:
+                print("The specified virus total api keys file address doesn't exists.")
         else:
             print(usage)
             sys.exit(2)
-    if current_malshare_api_key_index < 0:
-        print("You must specify an API key for this program to work.")
+    if malshare_apikeys_file_address is None:
+        print("You must specify at least a Malshare API key for this program to work.")
         sys.exit(2)
     if _loop24h_virus_scan:
-        if current_virus_total_api_key_index < 0:
+        if virustotal_apikeys_file_address is None:
             print("Must specify VirusTotal api key.")
-            print(usage)
-            sys.exit(2)
-        if current_malshare_api_key_index < 0:
-            print("Must specify Malshare api key.")
             print(usage)
             sys.exit(2)
         if _pc_address_to_download is None:
@@ -454,12 +405,14 @@ def download_file(_file_hash, destination):
     :param destination:
     :return: bool, str
     """
-    api_key = malshare_api_keys[current_malshare_api_key_index]
+    global malshare_api_key
+    api_key = malshare_api_key
     TAG = "DownloadingFileFromMalshare"
     my_logger.log(TAG, "Downloading hash: " + _file_hash)
     if os.path.exists(destination):
         my_logger.log(TAG, "File exists no need to download")
         return True, "File exists no need to download"
+
     _url = "http://malshare.com/api.php?api_key=" + api_key + "&action=getfile&hash=" + _file_hash
     r = requests.get(_url)
     content = r.content
@@ -468,10 +421,17 @@ def download_file(_file_hash, destination):
         _response = content.decode('utf-8')
     except Exception:
         pass
-    if 'ERROR! => Over Request Limit.' in _response:
-        my_logger.log(TAG, _response)
-        set_new_malshare_api_key_index()
-        return download_file(_file_hash, destination)
+
+    while 'ERROR! => Over Request Limit.' in _response:
+        my_logger.log(TAG, "Must set a new Malshare API key, the specified reached the requests limit.")
+        set_new_malshare_apikey()
+        api_key = malshare_api_key
+        _url = "http://malshare.com/api.php?api_key=" + api_key + "&action=getfile&hash=" + _file_hash
+        my_logger.log(TAG, "Now will use the api key: " + api_key)
+        r = requests.get(_url)
+        content = r.content
+        _response = content.decode('utf-8')
+
     if 'not activated' in _response:
         my_logger.log(TAG, _response)
         return False, "Wrong api key"
@@ -506,7 +466,8 @@ def handle_hash(file_hash, destination_folder=".", _db_handler=None,
     :type _db_handler: sqlite3.Connection
     :return: dict(), []
     """
-    api_key = malshare_api_keys[current_malshare_api_key_index]
+    global malshare_api_key
+    api_key = malshare_api_key
     TAG = "Handling hash " + file_hash
     my_logger.log(TAG, "")
     _result_messages = []
@@ -789,25 +750,70 @@ def vt_file_scan(api_key, file_address, db_handler):
         #return False, _error
 
 
-def set_new_malshare_api_key_index():
+def set_new_malshare_apikey():
+    TAG = "Setting new Malshare API Key"
+    my_logger.log(TAG)
+    global malshare_api_key
     global current_malshare_api_key_index
-    if current_malshare_api_key_index == len(malshare_api_keys) - 1:
+    global malshare_apikeys_file_address
+
+    _read = ""
+    with open(malshare_apikeys_file_address, "r") as f:
+        _read = f.read()
+
+    apikey_list = _read.split("\n")
+
+    if current_malshare_api_key_index == len(apikey_list) - 1 or current_malshare_api_key_index > len(apikey_list)\
+            or current_malshare_api_key_index == len(apikey_list):
         current_malshare_api_key_index = 0
     else:
-        current_malshare_api_key_index = current_malshare_api_key_index + 1
+        current_malshare_api_key_index += 1
+
+    apikey = apikey_list[current_malshare_api_key_index]
+    if apikey.strip() == "":
+        my_logger.log(TAG, "Apikey found is empty space, will look for a new one.")
+        set_new_malshare_apikey()
+
+    if is_apikey_valid(apikey):
+        my_logger.log(TAG, "Got new valid apikey is: " + apikey)
+        malshare_api_key = apikey
+    else:
+        my_logger.log(TAG, "Apikey not valid, will look for a new one.")
+        set_new_malshare_apikey()
 
 
-def set_new_virustotal_api_key_index():
+def set_new_virustotal_apikey():
+
     global current_virus_total_api_key_index
-    global virus_total_api_keys
     global virustotal_api_key
+    global virustotal_apikeys_file_address
 
-    if current_virus_total_api_key_index == len(virus_total_api_keys) - 1:
+    TAG = "Setting new VirusTotal API Key"
+    my_logger.log(TAG)
+
+    _read = ""
+    with open(virustotal_apikeys_file_address, "r") as f:
+        _read = f.read()
+
+    apikey_list = _read.split("\n")
+
+    if current_virus_total_api_key_index == len(apikey_list) - 1 or current_virus_total_api_key_index > len(apikey_list)\
+            or current_virus_total_api_key_index == len(apikey_list):
         current_virus_total_api_key_index = 0
     else:
-        current_virus_total_api_key_index = current_virus_total_api_key_index + 1
+        current_virus_total_api_key_index += 1
 
-    virustotal_api_key = virus_total_api_keys[current_virus_total_api_key_index]
+    apikey = apikey_list[current_virus_total_api_key_index]
+    if apikey.strip() == "":
+        my_logger.log(TAG, "Apikey found is empty space, will look for a new one.")
+        set_new_virustotal_apikey()
+
+    if is_apikey_valid(apikey):
+        my_logger.log(TAG, "Got new valid apikey is: " + apikey)
+        virustotal_api_key = apikey
+    else:
+        my_logger.log(TAG, "Apikey not valid, will look for a new one.")
+        set_new_virustotal_apikey()
 
 
 def get_list_of_inserted_hashes(db_handler):
@@ -838,11 +844,15 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
     :param virustotal_analysis_output_folder:
     :return:
     """
+    _empty_hashes_count_limit = 10
     global virustotal_api_key
-    malshare_api_key = malshare_api_keys[current_malshare_api_key_index]
+    global malshare_api_key
+    set_new_virustotal_apikey()
+    set_new_malshare_apikey()
     current_processing_date = starting_date
     TAG = "VirusTotalScanMain,"
     _api_request = "http://malshare.com/api.php?api_key=" + malshare_api_key + "&action=getlist"
+    _empty_hashes_count = 0
     _files_inserted_already = set()
     _processed_instances = set()
     if continue_from_existent_data:
@@ -884,8 +894,15 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
                     _hash = _hash.split('/')[-1].strip()
                 my_logger.log(TAG, "Processing hash: " + _hash)
                 if _hash.strip() == "":
+                    if _empty_hashes_count == _empty_hashes_count_limit:
+                        my_logger.log(TAG, "Have passed " + str(_empty_hashes_count_limit) +" empty hashes, will "
+                                                                                            "sleep for 2 minutes.")
+                        _empty_hashes_count = 0
+                        sleep(120)
                     my_logger.log(TAG, "Hash is empty space skiping")
+                    _empty_hashes_count += 1
                 if _hash.strip() != "":
+                    _empty_hashes_count = 0
                     if _hash in _files_inserted_already:
                         my_logger.log(TAG, "Hash was already handled, it might be a hash that was sent to analysis or "
                                            "its iterating over an existent db.")
@@ -922,7 +939,7 @@ def virustotal_analysis(malshare_output_folder, output_db_handler, db_file_addre
                     if result_code == -1:
                         my_logger.log(TAG, "Might got reached the requests on one minute limit by virus total API.")
                         my_logger.log(TAG, "Will use the next virustotal api key in the list.")
-                        set_new_virustotal_api_key_index()
+                        set_new_virustotal_apikey()
 
                     if result_code == -2:
                         my_logger.log(TAG, "File already queued for analysis.")
